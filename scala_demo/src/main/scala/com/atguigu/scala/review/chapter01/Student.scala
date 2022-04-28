@@ -22,7 +22,7 @@ package com.atguigu.scala.review.chapter01
  *       case class 除了包含 伴生类 和伴生对象外，还提供了 apply（）方法---模式匹配特别好用
  *
  */
-class Student(name:String, age: Int) {
+class Student(var name:String,var age: Int) {
   def printInfo() = {
     println(this.age + "岁的" + this.name + "在" + Student.school + "学习")
   }
