@@ -1,4 +1,6 @@
-package com.atguigu.scala.review.chapter01
+package com.atguigu.scala.review.chapter02
+
+import com.atguigu.scala.review.chapter01.Student
 
 /**
  *  @author Adam-Ma 
