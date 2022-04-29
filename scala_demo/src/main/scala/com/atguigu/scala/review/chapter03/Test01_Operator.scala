@@ -13,6 +13,10 @@ package com.atguigu.scala.review.chapter03
  *        1、Scala中的 == ，对于对象来说，效果就是 equals ，比较的就是两个对象的内容是否相等
  *          如果比较地址，使用 a.eq(B)
  *        2、Scala中没有 ++ ，-- ; 使用 +=， -= 来代替
+ *
+ *    运算符的本质： scala中 运算符其实也是方法调用
+ *        1) 当调用对象的方法时，点. 可以省略
+ *        2）当函数的参数只有一个或者没有时， () 可以省略
  */
 object Test01_Operator {
   def main(args: Array[String]): Unit = {
@@ -36,5 +40,18 @@ object Test01_Operator {
     }
 
     println("判断 s1 是否为空串 : " + isEmptyStr(s1))
+
+    /*
+      运算符的本质： scala中 运算符其实也是方法调用
+        1) 当调用对象的方法时，点. 可以省略
+        2）当函数的参数只有一个或者没有时， () 可以省略
+     */
+    val num1 = 10 .+ (20)
+    val num2 = 10 + (20)
+    val num3 = 10 + 20
+    // 省略 点.
+    println(s1 eq (s2))
+    // 省略 ()
+    println(s1 eq s2)
   }
 }
