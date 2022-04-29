@@ -1,4 +1,5 @@
 package com.atguigu.scala.review.chapter04
+import scala.collection.immutable
 
 /**
  *  @author Adam-Ma 
@@ -35,6 +36,17 @@ package com.atguigu.scala.review.chapter04
  *                j <- 1 to 2
  *                k <- 1 to 2
  *              }{具体的代码}
+ *    6、引入变量 ：
+ *        6-1 for（i <- 1 to 9; j = i + 3) {}
+ *        6-2 for {
+ *                i <- 1 to 9
+ *                j = i + 3
+ *           }{}
+ *    7、循环返回值： yield
+ *       val result: immutable.IndexedSeq[Int] = for(i <- 1 to 10) yield i * i
+ *    8、循环倒序：reverse
+ *        for(i <- 1 to 10 reverse)
+ *
  */
 object Test02_For {
   def main(args: Array[String]): Unit = {
@@ -133,6 +145,29 @@ object Test02_For {
         println(s"i = ${i}, j = ${j}, k = ${k}")
     }
 
+    // 6、引入变量
+    println("=" * 50)
+    for(i <- 1 to 9; j = i + 3){
+      println(s"i = $i, j = $j")
+    }
 
+    println("=" * 50)
+    for {
+      i <- 1 to 9
+      j = i + 3
+    }{
+      println(s"i = $i, j = $j")
+    }
+
+    // 7、循环返回值 yield
+    println("=" * 50)
+    val result: immutable.IndexedSeq[Int] = for(i <- 1 to 5) yield i * i
+    println(result)
+
+    // 8、循环倒序
+    println("=" * 50)
+    for(i <- 1 to 5 reverse){
+      println(i)
+    }
   }
 }
