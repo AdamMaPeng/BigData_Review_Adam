@@ -16,6 +16,8 @@ import scala.io.StdIn
  *     3） 多分支
  *     4） 分支语句的返回值
  *     5） if-else 的嵌套
+ *     6) if - else 代替三元运算符
+ *          val str: String = if (num > 0 ) "正数" else "负数"
  */
 object Test01_IfElse {
   def main(args: Array[String]): Unit = {
@@ -80,5 +82,9 @@ object Test01_IfElse {
     }else {
       println("老年")
     }
+
+    // if - else 代替三元运算符
+    val num = 10
+    val str: String = if (num > 0 ) "正数" else "负数"
   }
 }
