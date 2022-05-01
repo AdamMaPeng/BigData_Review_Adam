@@ -29,7 +29,6 @@ object Test06_LambdaSimplify {
     d((name) => {println(name)})
 
 //    （2）类型省略之后，发现只有一个参数，则圆括号可以省略；其他情况：没有参数和参数超过 1 的永远不能省略圆括号。
-    val ff = (name => println(name))
     d(name => {println(name)})
 
 //    （3）匿名函数如果只有一行，则大括号也可以省略
