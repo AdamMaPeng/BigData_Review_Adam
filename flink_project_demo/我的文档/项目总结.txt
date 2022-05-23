@@ -1,0 +1,240 @@
+2022.05.23
+1、通过 Flink 设置检查点保存的位置若为文件系统，若保存在 HDFS 中，由 Flink程序访问 HDFS ，用户为：Administrator
+    对文件路径没有写的权限，所以需要：
+        方式一） env.getCheckpointConfig().setCheckpointStorage("hdfs://hadoop202:8020/gmall/ck");
+                  //2.7 设置操作hdfs的用户
+                  System.setProperty("HADOOP_USER_NAME","atguigu");
+            将当前操作 hadoop 的用户设置为有权限写的用户
+        方式二） hdfs dfs -chmod -R 777 /
+            将 HDFS 中的所有文件的权限都改为 777
+
+2、设置状态后端的时候 ：
+    2.1 设置状态存储的位置   : env.setStateBackend(new HashMapStateBackend());
+    2.2 设置检查点存储的位置 : env.getCheckpointConfig().setCheckpointStorage("hdfs://hadoop102:8020/gmall/ck");
+            注意           : 当通过 Flink 将检查点存储到 HDFS 时，操作的用户时 Administer，没有相应的写权限。
+
+    Flink 的状态后端：
+        Flink 1.12 时，存在三种状态后端
+            MemoryStateBacked   基于内存的状态后端，状态存储在TaskManager 中，检查点保存在 JobManager 中
+            FsStateBacked       基于文件系统的状态后端，状态存储在TaskManager ，检查点存储在文件系统中
+            RocksDBStateBacked  基于RocksDBStateBacked ,状态存储在 RocksDB，检查点存储在远程文件系统中
+        Flink 1.13 时，存在两种状态后端
+            HashMapStateBacked          ： 同 1.12 中的 内存和文件系统，状态都存储在 TaskManager 中，可以设置保存检查点的路径
+            EmbeddedRocksDBStateBacked ：  同 1.12 RocksDBStateBacked
+
+3、Kafka 消费者的反序列化：
+        new SimpleStringSchema():
+            new FlinkKafkaConsumer<String>(topic, new SimpleStringSchema(), props);
+            此种反序列化的方式会导致 为null 的值，抛出异常
+        new KafkaDeserializationSchema<String>() {} ：
+            new FlinkKafkaConsumer<>(topic, new KafkaDeserializationSchema<String>() {}, props);
+            此种方式可以设置对于 null 的值，如何进行反序列化，一般直接返回 null
+
+4、lombok 注解
+        可以简化开发，但是一般在公司时候需要使用，还是需要看一下其他同事是否在用，然后再评估是否使用。
+        @Data : 可以使我们编写的 JavaBean 少些很多代码，会自动添加 getter/setter，toString
+
+5、Flink CDC 连接问题：
+        方案1：在cdc连接的代码那 你加一个 .debeziumProperties(props) Properties props = new Properties().setProperty("jdbc.properties.useSSL","false")
+        方案2：试试这个方案 https://blog.csdn.net/wuyu7448/article/details/121131352
+        方案3：把flinkCDC版本改低
+           https://ververica.github.io/flink-cdc-connectors/release-1.4/content/about.html#usage-for-datastream-api
+
+6、算子状态：（就两种）
+        广播状态
+        列表状态
+
+7、对于函数式接口（接口中只有一个抽象方法）的使用，可以使用
+        匿名函数类
+        lambda 表达式
+        方法默认的调用： 类名::方法名
+
+8、对于 connect 连接， 必须 主流.connect(广播流)
+
+9、通过 FastJson 通过 key 获取一个 .getString(), 获取到的 string ，如果需要校验该String 是否为 json 格式的 string，
+        需要调用 FastJson 的 JSONValidator.from(dataJsonObj.toJSONString()).validate();
+
+10、广播状态：
+        BroadcastState<String, TableProcess> broadcastState =  ctx.getBroadcastState(mapStateDescriptor);
+             ctx 为环境上下文对象
+        broadcastState.put(sourceTable, tableProcess)
+
+12、将数组转换成 Array ：
+        String[] arr = new String[5];
+        List<String> list = Arrays.asList(arr)
+
+11、移除 map 中的某个元素，如果满足某个条件
+        List<String> columnList = Arrays.asList(columns);
+        Set<Map.Entry<String, Object>> entries = dataJsonObj.entrySet();
+        entries.removeIf(entry -> !columnList.contains(entry.getKey()));
+
+12、Hbase 开启集群： start-hbase.sh
+
+13、Phoenix 开启 客户端：sqlline.py
+
+14、将流转换为 广播流：
+        MapStateDescriptor<String, TableProcess> mapStateDescriptor = new MapStateDescriptor<>("dim_prop", String.class, TableProcess.class);
+        BroadcastStream<String> dimPropStream = mysqlDS.broadcast(mapStateDescriptor);
+        广播流中，广播状态描述器 mapStateDescriptor 是一个单例实现
+
+15、单例设计模式：
+        饿汉式： 类加载时就会创建一个单例的对象
+        懒汉式： 只有其他类调用当前单例类所提供的创建对象的方法时，单例对象才会被调用 （数据库连接池等更多使用才方式，降低资源的消耗）
+                 双重校验锁 ，解决懒汉式单例模式线程安全问题
+16、一般对于 synchronized 关键字设置线程锁，有
+        同步方法
+            同步方法会对当前方法所有的代码都上锁，效率比较低。
+        同步代码块
+            建议使用同步代码块，只对一部分代码上锁
+
+17、集合中删除元素，使用遍历集合本身的方式，会报错，而使用迭代器，通过迭代器删除，则不会报错
+        错误写法：
+            // 通过 集合自身遍历的方式删除元素
+            Set<Map.Entry<Integer, String>> entries = map.entrySet();
+            for (Map.Entry<Integer, String> entry : entries) {
+                if (entry.getKey() == 1) {
+                    entries.remove(entry);
+                }
+            }
+        正确写法：
+            // 通过 iterator 迭代器方式删除元素
+            Iterator<Map.Entry<Integer, String>> iterator = entries.iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<Integer, String> next = iterator.next();
+                if (next.getKey() == 1) {
+                    iterator.remove();
+                }
+            }
+
+18、检查点相关的设置
+        env.enableCheckpointing(5000L, CheckpointingMode.EXACTLY_ONCE);
+            其中CheckpointingMode.EXACTLY_ONCE
+                指的是 检查点分界线 barrier
+                1、如果是 EXACTLY_ONCE  ，则表名所有的检查点分界线都到齐，才会执行当前算子状态快照，精确一次的状态一致性
+                2、如果是 AT_LEAST_ONCE , 则表明至少 有一个 检查点到了后，就会保存当前算子状态快照，至少一次，效率高，但是精确性差
+
+
+19、Flink 项目中，如果读取的是 Kafka 中的数据，
+       从消费角度考虑   ----- 那么设置并行度需要与 Kafka 中对应 topic 的分区数相同，使得每个分区一个消费者。整个并行度构成一个消费者组。
+       从水位线角度考虑 ----- 如果分区数为2，读取并行度设置为4， 后续keyBy如果设置4个分区，那么就有两个分区一直在等待水位线的到来，就会一直处于等待状态
+                            后续的开窗、定时任务操作则无法触发
+
+
+2022.05.24
+1、StringUtils.join(Collection col, Seperator sep) : 将当前集合中的元素，按照指定分隔符进行拼接
+    类似 concat_ws()
+    List<Integer> list = new ArrayList<>(1,2,3,4);  ---> 1,2,3,4  没有最外层的 ()
+
+2、对于将dim 层的数据写入到对应的表中，直接从 JSONObj value ，中获取 key,value 往 insert 语句中插入，
+    可能存在 key 与 value 顺序不一致 的问题，但是当前 JSONObject 内部是一个个的 EntrySet ，从 这个里
+    获取 Key ，value ，取出来的顺序就是可以保证的。
+String upsertSQL = "upsert into " + GmallConfig.PHOENIX_SCHEMA + "." + sink_table + " ("
+                + StringUtils.join(value.keySet(), ",") + ")"
+                +  " values ('"
+                + StringUtils.join(value.values(), "','") + "')" ;
+
+3、使用 Connection 的 子类 PhoenixConnection 连接的话，需要手动提交事务，因为其 autoCommit=false
+    所以使用 PhoenixConnection 创建的 Connection ，需要执行完 SQL ，自己提交sql语句
+    而项目中使用的是 DruidDataSource，数据库连接池，其事务是自动提交的。
+
+4、历史唯独数据的处理
+在通过 maxwell 采集维度数据的时候，maxwell 只会按照配置读取的库，
+去读取mysql 中的相应库的binlog， 将变化的数据采集到 kafka 中，而历史的维度数据
+现在是没法采集到的。 而 maxwell 提供的maxwell-bootstrap 功能，可以将历史全表数据
+进行扫描，然后交给 maxwell 分装为相应的 json字符串，然后再发送到 kafka中
+
+5、流量域事务事实表 ：
+    1）将flume 采集到的日志服务器数据存入 Kafka 中的 topic_log 主题中
+    2）Flink 程序从 topic_log 中读取日志数据
+    3）根据流量域日志数据的不同分类：
+            启动日志    : dwd_traffic_start_log
+            页面日志    : dwd_traffic_page_log
+            曝光日志    : dwd_traffic_display_log
+            动作日志    : dwd_traffic_action_log
+            错误日志    : dwd_traffic_error_log
+       分别写入对应的 topic 中
+       主题命名方式 ： dwd_数据域_种类_log
+    4) 由于可能存在用户清理了缓存，is_new 新用户状态被清理掉了，导致新老访问
+        在后续指标统计时出错，所以当前需要使用 Flink 状态编程，将新用户的状态
+        保存起来
+
+ 6、Flink 中的 分区、分组、分流
+    分区：设置不同的并行度，就代表这分不同的区。 例如 kafka 中topic 有 4 个分区，当前Flink 设置 4 个并行度，那么就分了 4个区
+    分组： keyBy ,按照 key 的hash  % 分区个数取余， 可能存在多个 key 进入一个分区的可能，所以分区的范围更大
+    分流： 通过侧输出流进行分流。 OutputTag 定义流的分支，在主流中通过 SideOutputStream（tag） 获取到分支流。
+
+7、侧输出流的用途：
+    1） 数据延迟，对于超过水位线的数据，还有窗口的 allowedLateness 做保证，而窗口最后都关了，则后续还有数据到来，则会将依然迟到的数据，存放到侧输出流中
+    2） 数据分流 ： 给定不同的 OutputTag，从而将不同标记的数据，发往不同的流中
+
+8、ali- FastJson 使用
+    1） TableProcess tableProcess = jsonObject.getObject("after", TableProcess.class);
+        通过给定类，在 JsonObject 中，获取 给定 key 所对应的 value（Json格式的） ，将value 转换成 这个给定类。
+        如果 value（Json）中的 key 的名称与 给定类的属性一一对应
+      或如果 value（Json）中的 key 的名称以下划线分隔，拼接起来与给定类的属性一一对应
+      都可以将 value 转换成 给定类
+    2）JSONObject afterJsonObj = jsonObj.getJSONObject("after");
+       TableProcess tb = afterJsonObj.toJavaObject(TableProcess.class);
+       效果同 1）
+    3） JSONObject js = JSON.parseObject（JsonStr）;
+        将 json格式的字符串转换成 JSONObject
+
+9、各种套路：
+    1）检查点的设置套路
+
+    2）JDBC执行sql套路
+
+    3）Kafka 消费者套路
+
+    4）侧输出流编写的套路
+
+10、OutputTag 声明的注意点
+
+
+11、Kafka 篇：
+    生产者粘性分区切换的条件：
+        batch.size=16kb
+        linger.ms=0s
+    FlinkKafkaProducer:
+        两阶段提交： 将数据往下游写，一开始标记为预提交，等检查点保存完成后，才会真的提交。 可以保证 精准一次性（Exactly-Once）
+         如： public class FlinkKafkaProducer<IN>  extends TwoPhaseCommitSinkFunction
+         1）由于FlinkKafkaProducer 是两阶段提交的。
+            当数据由生成者发送到对应的topic中时，对于消费者一开始是不可见的（由于两阶段提交）。如果设置了检查点。
+            检查点从 source -> transform -> sink，当检查点分界线（barrier）到达sink后，会对sink 中的状态进行保存，
+            当检查点存储好后（存储在状态后端设置的方式，检查点存储位置），数据才会被真正提交。然后才会进行第二次提交。开启新的事务
+
+            正是因为FlinkKafkaProducer是两阶段提交的，为了保证提交的 ACID，所以肯定涉及到事务。而当前这个事务又和检查点有关，
+            检查点超时时间设置的是 1分钟，那么事务提交的时间就应该比一分钟久（但最大15min）
+            所以在进行生产的时候，指定 Properties时，需要
+                props.setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG,15*60*1000 + "")
+         2) new FlinkKafkaProducer时，有多种传参方式，有的构造器传参不是Exactly-Once 的，例如：
+                public FlinkKafkaProducer(
+                            String topicId,
+                            SerializationSchema<IN> serializationSchema,
+                            Properties producerConfig) {}
+                底层是：Semantic.AT_LEAST_ONCE,
+                    semantic：语义的
+
+
+
+        配置参数： ProducerConfig
+    FlinkKafkaConsumer:
+        配置参数： ConsumerConfig
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
