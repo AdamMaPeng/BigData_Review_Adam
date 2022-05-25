@@ -9,6 +9,7 @@ package com.atguigu.gmall.realtime.common;
  * DESC :
  */
 public class GmallConfig {
+    public static final String KF_BOOTSTRAP_SERVER = "hadoop102:9092,hadoop103:9092,hadoop104:9092";
     public static final String PHOENIX_SCHEMA = "GMALL1118_REALTIME";
     public static final String PHOENIX_DRIVER = "org.apache.phoenix.jdbc.PhoenixDriver";
     public static final String PHOENIX_URL = "jdbc:phoenix:hadoop102,hadoop103,hadoop104:2181";
