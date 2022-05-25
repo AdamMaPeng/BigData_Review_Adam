@@ -177,6 +177,84 @@ public class DwdTrafficBaseLogSplit {
         // 打印已经修复好的用户状态流的数据
 //        repairUserStateDS.print("用户状态已修复： ");
 
+// TODO 6.将主流中非脏数据，通过测输出流进行分流，
+        // 6.1 定义侧输出流标签
+        OutputTag<String> startTag = new OutputTag<String>("startTag"){};
+        OutputTag<String> displayTag = new OutputTag<String>("displayTag"){};
+        OutputTag<String> actionTag = new OutputTag<String>("actionTag"){};
+        OutputTag<String> errorTag = new OutputTag<String>("errorTag"){};
+        // 6.2 将 修复好用户状态的数据进行分流 ： 主流 pageLog 数据， 侧输出流 为其他数据
+        SingleOutputStreamOperator<String> pageDS = repairUserStateDS.process(new ProcessFunction<JSONObject, String>() {
+            @Override
+            public void processElement(JSONObject jsonStr, Context ctx, Collector<String> out) throws Exception {
+                // 6.2.1 判断 jsonStr 中是否包含 err ，如果包含，则直接将数据写入到 errorTag 侧输出流中,然后将该条 jsonStr 中的 err与err对应的数据从 jsonStr 中移除掉
+                if (jsonStr.containsKey("err")) {
+                    ctx.output(errorTag, jsonStr.toJSONString());
+                    jsonStr.remove("err");
+                }
+                if (jsonStr.containsKey("start")) {
+                    ctx.output(startTag, jsonStr.toJSONString());
+                }
+                if (jsonStr.containsKey("page")) {
+                    JSONObject common = jsonStr.getJSONObject("common");
+                    JSONObject page = jsonStr.getJSONObject("page");
+                    Long ts = jsonStr.getLong("ts");
+                    // 判断当前page 页中是否包含 displays 字段
+                    if (jsonStr.containsKey("displays")) {
+                        // 获取 displays 数组中的内容
+                        JSONArray displays = jsonStr.getJSONArray("displays");
+                        for (int i = 0; i < displays.size(); i++) {
+                            // 创建新的 JSONObject ,用来构建存储到 display topic 中的 jsonStr 数据
+                            JSONObject displayJson = new JSONObject();
+                            displayJson.put("common", common);
+                            displayJson.put("page", page);
+                            displayJson.put("display", displays.get(i));
+                            displayJson.put("ts", ts);
+                            // 将 创建的 displayJson 写入到测输出流中
+                            ctx.output(displayTag, displayJson.toJSONString());
+                        }
+                        // 当所有的 display 都添加到的 测输出流中后，将 原 jsonStr 中的 display 字段移除
+                        jsonStr.remove("displays");
+                    }
+                    // 如果包含 actions 字段
+                    if (jsonStr.containsKey("actions")) {
+                        // 获取 displays 数组中的内容
+                        JSONArray actions = jsonStr.getJSONArray("actions");
+                        for (int i = 0; i < actions.size(); i++) {
+                            // 创建新的 JSONObject ,用来构建存储到 display topic 中的 jsonStr 数据
+                            JSONObject actionJson = new JSONObject();
+                            actionJson.put("common", common);
+                            actionJson.put("page", page);
+                            actionJson.put("actions", actions.get(i));
+                            actionJson.put("ts", ts);
+                            // 将 创建的 displayJson 写入到测输出流中
+                            ctx.output(actionTag, actionJson.toJSONString());
+                        }
+                        // 当所有的 display 都添加到的 测输出流中后，将 原 jsonStr 中的 display 字段移除
+                        jsonStr.remove("actions");
+                    }
+                    out.collect(jsonStr.toJSONString());
+                }
+            }
+        });
+
+        // TODO 7.将分完流后的数据写入到各自的topic 中，作为事实表
+        DataStream<String> errorDS = pageDS.getSideOutput(errorTag);
+        DataStream<String> startDS = pageDS.getSideOutput(startTag);
+        DataStream<String> displayDS = pageDS.getSideOutput(displayTag);
+        DataStream<String> actionDS = pageDS.getSideOutput(actionTag);
+
+        errorDS.print("errorLog: ");
+        startDS.print("startLog: ");
+        pageDS.print("pageLog: ");
+        displayDS.print("displayLog: ");
+        actionDS.print("actionLog: ");
+
+        errorDS.addSink(MyKafkaUtil.getKfProducer("dwd_traffic_error_log"));
+        startDS.addSink(MyKafkaUtil.getKfProducer("dwd_traffic_start_log"));
+        pageDS.addSink(MyKafkaUtil.getKfProducer("dwd_traffic_page_log"));
+        displayDS.addSink(MyKafkaUtil.getKfProducer("dwd_traffic_display_log"));
+        actionDS.addSink(MyKafkaUtil.getKfProducer("dwd_traffic_action_log"));
 
         env.execute();
     }
