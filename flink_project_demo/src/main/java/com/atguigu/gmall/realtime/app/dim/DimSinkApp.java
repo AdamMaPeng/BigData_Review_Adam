@@ -96,8 +96,8 @@ public class DimSinkApp {
          *  fixedDelayRestart  ： 当 365 天总共 重启了3 次，就直接报错
          *  failureRateRestart ： 故障率重启，30天内重启3次，每隔3秒重启一次
          */
-        //env.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, Time.days(365)));
-        env.setRestartStrategy(RestartStrategies.failureRateRestart(3, Time.days(30), Time.days(3L)));
+        env.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, Time.seconds(3)));
+        env.setRestartStrategy(RestartStrategies.failureRateRestart(3, Time.days(30), Time.seconds(3L)));
         // 2.6 状态后端
         /**
          *  对于状态后端：
