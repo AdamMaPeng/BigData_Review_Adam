@@ -1,0 +1,133 @@
+02 - 流量域事实表总结
+流量域事实表：
+    未经加工的流量域事实表
+        启动日志事实表             dwd_traffic_start_log
+        页面日志事实表             dwd_traffic_page_log
+        曝光日志事实表             dwd_traffic_display_log
+        动作日志事实表             dwd_traffic_action_log
+        错误日志事实表             dwd_traffic_error_log
+    加工后的流量域事实表：
+        流量域独立访客事务事实表    dwd_traffic_unique_visitor_detail
+        流量域用户跳出事务事实表    dwd_traffic_user_jump_detail
+
+业务流程：
+未经加工的流量域事实表
+    1、流量域的数据来自 用户行为日志，分为如下类型：
+            启动日志    start
+            页面日志    page
+                |--曝光日志     displays
+                |--动作日志     actions
+            错误日志    err（启动日志和页面日志中均可能存在）
+    2、通过 flume 采集用户行为日志，到 Kafka 的 topic_log 主题中，将用户行为日志作为 ODS 层中的流量域的数据来源。
+    3、通过 FlinkKafkaConsumer 消费 topic_log 中的数据
+    4、对原始数据中，用户的状态进行修复：is_new=1 ?
+    5、将修复好的数据，通过 测输出流进行分流，分到各个未加工的流量域对应的数据流中
+    6、将分好流的数据通过 FlinkKafkaProducer 写入到 Kafka 对应的 topic 中，作为未经加工的流量域事实表
+
+流量域独立访客事务事实表
+    1、通过 FlinkKafkaConsumer 消费 dwd_traffic_page_log 中的数据
+    2、将数据按照 mid 进行分组，接下来针对每一个 mid 设备进行操作
+    3、对每个 mid 维护一个ValueState 值状态，用于保存之前访问的日期。
+    4、根据 如下逻辑来进行修复
+         is_new = 1
+            获取 ts-> currentDate, 若 lastVisitValueDate == null， 则 lastVisitValueDate = currentDate
+            获取 ts-> currentDate, 若 lastVisitValueDate！= null 且 lastVisitValueDate ！= currentDate， is_new = 0
+            获取 ts-> currentDate, 若 lastVisitValueDate！= null 且 lastVisitValueDate == currentDate ， is_new = 1
+         is_new = 0
+            获取 ts-> currentDate, 若 lastVisitValueDate == null， 则 lastVisitValueDate = currentDate
+            获取 ts-> currentDate, 若 lastVisitValueDate != null， 则 is_new = 0
+    5、由于独立访客需要按照每天来进行统计，所以需要对状态设置 一个 TTL，过一天过期
+    6、将处理好的数据，通过 FlinkKafkaProduer 写入到 dwd_traffic_unique_visitor_detail 中
+
+流量域用户跳出事务事实表
+    1、通过 FlinkKafkaConsumer 消费 dwd_traffic_page_log 中的数据
+    2、由于用户跳出的逻辑为：
+            first_event:last_page_id == null(首页)，second:last_page_id==null(首页)    ---》 fisrt   算跳出用户
+            first_event:last_page_id == null(首页)，second:last_page_id！=null(首页)   ---》 fisrt 不算跳出用户
+            first_event:last_page_id == null(首页)，second:一直没有数据/超过跳出判断时间  ---》 fisrt   算跳出用户
+       因为要保证数据到来的顺序，避免乱序，所以需要设置水位线
+    3、将数据按照 mid 进行keyBy分组，接下来针对每一个 mid 设备进行操作
+    4、由于需要将第一个事务和第二个事务共同处理来判断是否为跳出用户，所以需要是否用到 Flink CEP（Conplex Event Processing）
+       通过 Flink CEP 对 第一个事务和第二个事务顺序处理
+    5、第二个事务可能很久都不到，所以需要在 CEP 中设置 withIn() 超时时间，超时到的数据会自动放到侧输出流中
+    6、定义侧输出流标签（匿名内部类而非本类 new OutputTag<String>(){}）
+    7、通过主流获取测输出流
+    8、将主流和测输出流 union
+    9、将 union 的结果写入到 Kafka 的 dwd_traffic_user_jump_detail 主题中
+
+技术点：
+    状态编程： 状态的过期时间设置
+         // TODO 6.利用状态过滤掉今天已经访问的访客
+            SingleOutputStreamOperator<String> uvDS = keyedStream.process(new KeyedProcessFunction<String, JSONObject, String>() {
+                // 6.1 定义一个状态
+                private ValueState<String> lastVisitState = null;
+
+                @Override
+                public void open(Configuration parameters) throws Exception {
+                    ValueStateDescriptor<String> lastVisitDateDescript = new ValueStateDescriptor<>("lastVisitDate", String.class);
+                    // 6.2 通过状态描述器设置 状态的 TTL
+                    lastVisitDateDescript.enableTimeToLive(StateTtlConfig.newBuilder(Time.days(1)).build());
+                    lastVisitState = getRuntimeContext().getState(lastVisitDateDescript);
+                }
+                @Override
+                public void processElement(JSONObject jsonObj, Context ctx, Collector<String> out) throws Exception {
+                    // 6.2 获取当前用户当前 的访问时间
+                    Long ts = jsonObj.getLong("ts");
+                    String currentDate = DateFormatUtil.toDate(ts);
+                    String lastVisitDate = lastVisitState.value();
+                    if (lastVisitDate == null || lastVisitDate.length() == 0 || !currentDate.equals(lastVisitDate)) {
+                        lastVisitState.update(currentDate);
+                        out.collect(jsonObj.toJSONString());
+                    }
+                }
+            });
+
+         涉及到状态的设置，都是在状态描述器中进行设置，普通的状态，只能新增和获取数据
+            ValueState ： update()更新数据     value()获取数据
+            ListState  ： add()   更新数据     get() 获取数据
+         例如 状态的 TTL 设置：
+            ValueStateDescriptor<String> lastVisitDateDescript = new ValueStateDescriptor<>("lastVisitDate", String.class);
+            // 6.2 通过状态描述器设置 状态的 TTL
+            lastVisitDateDescript.enableTimeToLive(StateTtlConfig.newBuilder(Time.days(1)).build());
+
+    FlinkKafkaProducer 生产者，如果设置为 EXACTLY_ONCE 方式生产数据
+        Properties props = new Properties();
+        props.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, GmallConfig.KF_BOOTSTRAP_SERVER);
+        // FlinkKafkaProducer继承两阶段提交，涉及到事务，需要设置事务提交延时，默认最大15min
+        props.setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 15 * 60 * 1000 + "");
+
+        FlinkKafkaProducer<String> stringFlinkKafkaProducer = new FlinkKafkaProducer<String>("default_topic", new KafkaSerializationSchema<String>() {
+            @Override
+            public ProducerRecord<byte[], byte[]> serialize(String jsonStr, @Nullable Long timestamp) {
+                return new ProducerRecord<byte[], byte[]>(topicName, jsonStr.getBytes());
+            }
+        }, props, FlinkKafkaProducer.Semantic.EXACTLY_ONCE);
+
+        1、FlinkKafkaProducer 如何保证状态一致性？
+               两阶段提交 + 状态的保存
+              代码中：1） Semantic.EXACTLY_ONCE
+                     2) // FlinkKafkaProducer继承两阶段提交，涉及到事务，需要设置事务提交延时，默认最大15min
+                          props.setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 15 * 60 * 1000 + "");
+
+    Flink CEP 编程
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

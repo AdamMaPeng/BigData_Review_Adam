@@ -1,0 +1,79 @@
+维度建模理论 -- 维度表建立
+业务流程实现：
+    在 当前 Flink 实时数仓项目中，我们通过 业务总线矩阵获取到了所有的维度，根据业务表中确定主维表和相关维表。
+    1、维度数据来源？
+        我们的维度数据来自业务数据库，首先我们通过 maxwell 监控 mysql 业务数据库的 binlog日志文件，将日志文件中所有的
+        变化数据（新增、修改、插入） ，封装成 json ，发送到了 Kafka 中的一个统一的主题：topic_db 中，这也是 ODS 层数据
+        来源之一。
+    2、维度表存储在哪呢？
+        由于 topic_db 中的数据是业务数据库中所有的表的变更数据，并不是只有维度表所需要的数据。所以就需要将维度数据过滤出来，
+        存储到维度层的维度表中。而需要将维度数据存储到维度表中，首先需要确定都有那些维度表，当确定了维度表后，维度表存储在什么
+        数据库中，这些都有待考虑。
+
+        由于维度数据在正常的需求中，一般都是需要被事实表中的某个数据进行关联获取到对应的维度数据的。所以 需要将维度数据保存在 （k,v）
+        类型的数据库中，而常见的 (k,v)类型数据库有 redis ，Hbase。 当前考虑到 redis 是完全基于内存的，当数据量太大，对内存的压力
+        太大，所以当前采用 Hbase 作为 维度表存储的数据库。
+
+    3、维度表如何建立？
+        1）由于需要从ODS层中所有的业务数据中过滤出维度数据，而ODS层的业务数据是由 maxwell 采集的，maxwell 基于 binlog 采集，封装的Json
+        格式数据正好有一个 table 字段。
+        2）而我们需要做的，就是维护一个 所有维度表的这样一个集合，让没来一条数据，获取到 table 名，都去 这个集合中 判断是否存在。
+        3）而通过代码将这个集合写死，在项目中如果维度表发生变化，是不方便进行维护的。并且有了维度表名，如果在 Hbase 中建立维度表，手动建立肯定也不现实。
+        4）所以我们 将维度表表名，字段，主键，扩展字段，维度表所对应业务数据库中的业务表维护在一张配置表中。
+        5）通过 FlinkCDC，实时读取配置表的数据，根据配置表的数据，通过 JDBC 连接到 Hbase ，在 Hbase 中创建对应的维度表。
+
+    4、如何过滤出维度数据，并将维度数据存储到维度表中？
+        1）由于有了 Kafka 的 topic_db 主题中数据作为 ODS层的业务数据，所以可以通过 FlinkKafkaConsumer 来消费 topic_db 中的数据。
+        2）当消费到了数据后，此时需要过滤出维度数据。
+        3）通过 Flink CDC 实时读取 mysql 中存储的 维度配置表中的数据
+        4）由于当前环境设置了与 topic_db 相同的并行度，所以需要将 配置数据进行广播。形成广播流
+        5）得到了业务数据的流 和 配置数据的广播流，如何让广播流中的数据到各个业务流的并行子任务上，此时需要将两个流进行 连接 connect
+        6）由于 connect 后，需要分别处理各自流中的数据。
+        7）对于广播流中的数据：当通过FlinkCDC获取到配置表数据后，我们需要做三件事
+            i.  获取到配置表的各个字段
+            ii. 根据各个字段，在 Hbase 中创建出 DIM 维度表
+            iii.将维度表的各个字段作为广播状态进行存储
+        8）对于主流中的数据：通过Kafka 读取到后，我们需要做如下几件事：
+            i.  获取数据中的 table 字段，在广播状态中看是否有匹配项
+            ii. 如果有匹配项，获取到 json中的 data 字段对应的值（data 中记录了 变化数据所在行的所有字段及其值）
+            iii.由于DIM层的维度表，可能只取了业务表中的部分字段作为维度字段，所有可以过滤一下所需要的字段及其值将其保留
+            iv. 将过滤后的数据拼接上 维度表的表名，一起发送到下游，通过 addSink（）算子将数据写入到最终的 DIM表中
+
+技术点：
+    1、FlinkCDC 读取 配置表数据
+        MySqlSource<String> mySqlSource = MySqlSource.<String>builder()
+                        .hostname("hadoop102")
+                        .port(3306)
+                        .databaseList("gmall2022_config") // set captured database
+                        .tableList("gmall2022_config.table_process") // set captured table
+                        .username("root")
+                        .password("root")
+                        .deserializer(new JsonDebeziumDeserializationSchema()) // converts SourceRecord to JSON String
+                        .startupOptions(StartupOptions.initial())
+                        .build();
+        注意：
+            1、Flink CDC 是 Flink 1.11出现的，当时只支持 mysql，PortgrSQL 两种数据库
+            2、为什么不使用 Flink CDC 读取 业务库中的数据？
+                1）Flink CDC 是 Flink 1.11出现的，当时只支持 mysql，PortgrSQL 两种数据库。可能存在兼容性问题
+                2）为了保证 ODS层数据的完成性，我们的实时项目 ODS 层数据都保存在 Kafka 中；ODS 层数据来源有 业务数据，用户行为日志数据
+                   通过 Flink CDC 采集后， Kafka ODS 层数据就缺失了。
+                3）FLink CDC 会采集全部表的变化，不能采集部分表的变化，不够灵活。而Maxwell 可以采集我们所需要的表变化的数据
+
+    2、过滤维度表不存在的字段：entrySet.removeIf();
+        // 获取 dim 表中所有的字段
+        String[] columns = sinkColumns.split(",");
+        // 将 dim 表中的字段构成的数组转化为 Array
+        List<String> columnList = Arrays.asList(columns);
+        Set<Map.Entry<String, Object>> entrySet = dataJsonObj.entrySet();
+        entrySet.removeIf(entry -> !columnList.contains(entry.getKey()));
+
+    3、通过 JSONObject 获取到其中某个字段的 对应的 JSONObject 后，将 JSONObject 转换成对应的 POJO类：
+        jsonObject.getObject("after", TableProcess.class);
+
+    4、拼接 sql 语句的时候， 需要插入维度数据的字段和 字段对应的值，由于已经过滤完，只剩需要写入 维度表的字段与字段的数据。
+       并且 JSONObject 存储数据的时候，是以 entry 进行存储的。获取 entry.keySet() 和 entry.values()是可以保证顺序的，
+       所以代码如下：
+       String upsertSQL = "upsert into " + GmallConfig.PHOENIX_SCHEMA + "." + sink_table + " ("
+                       + StringUtils.join(value.keySet(), ",") + ")"
+                       +  " values ('"  + StringUtils.join(value.values(), "','") + "')" ;
+
