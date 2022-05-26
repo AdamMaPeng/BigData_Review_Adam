@@ -95,6 +95,20 @@ public class DwdTrafficUniqueVisitorDetail {
                 lastVisitState = getRuntimeContext().getState(lastVisitDateDescript);
             }
 
+            /**
+             *  按照如下逻辑进行判断
+             *          is_new = 1
+             *             获取 ts-> currentDate, 若 lastVisitValueDate == null， 则 lastVisitValueDate = currentDate
+             *             获取 ts-> currentDate, 若 lastVisitValueDate！= null 且 lastVisitValueDate ！= currentDate， is_new = 0
+             *             获取 ts-> currentDate, 若 lastVisitValueDate！= null 且 lastVisitValueDate == currentDate ， is_new = 1
+             *          is_new = 0
+             *             获取 ts-> currentDate, 若 lastVisitValueDate == null， 则 lastVisitValueDate = currentDate
+             *             获取 ts-> currentDate, 若 lastVisitValueDate != null， 则 is_new = 0
+             * @param jsonObj
+             * @param ctx
+             * @param out
+             * @throws Exception
+             */
             @Override
             public void processElement(JSONObject jsonObj, Context ctx, Collector<String> out) throws Exception {
                 // 6.2 获取当前用户当前 的访问时间
