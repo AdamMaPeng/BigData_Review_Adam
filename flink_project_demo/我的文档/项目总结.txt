@@ -47,7 +47,7 @@
 7、对于函数式接口（接口中只有一个抽象方法）的使用，可以使用
         匿名函数类
         lambda 表达式
-        方法默认的调用： 类名::方法名
+        方法默认调用： 类名::方法名
 
 8、对于 connect 连接， 必须 主流.connect(广播流)
 
@@ -81,6 +81,7 @@
         饿汉式： 类加载时就会创建一个单例的对象
         懒汉式： 只有其他类调用当前单例类所提供的创建对象的方法时，单例对象才会被调用 （数据库连接池等更多使用才方式，降低资源的消耗）
                  双重校验锁 ，解决懒汉式单例模式线程安全问题
+
 16、一般对于 synchronized 关键字设置线程锁，有
         同步方法
             同步方法会对当前方法所有的代码都上锁，效率比较低。
@@ -181,15 +182,38 @@ String upsertSQL = "upsert into " + GmallConfig.PHOENIX_SCHEMA + "." + sink_tabl
 
 9、各种套路：
     1）检查点的设置套路
+        开启检查点
+        设置超时时间
+        设置两个检查点之间的最小时间间隔
+        Job取消时，检查点是否保存
+        重启策略
+        状态后端
+        HDFS 操作用户设置为 有权限读写的用户
 
     2）JDBC执行sql套路
+        注册驱动
+        获取链接
+        获取数据库操作对象
+        执行sql
+        处理结果集
+        释放资源
 
     3）Kafka 消费者套路
+       指定 topic 名称
+       指定 消费者组
+       key 的反序列化
+       value 的反序列化
+       Kafka集群地址
 
     4）侧输出流编写的套路
+       定义侧输出流标签： OutputTag opt = new OutputTag("error_log"){}；
+       主流调用process 算子：
+       在 process 算子中，通过 运行时上下文 ctx.output(opt, data),将数据写入到侧输出流中
+       主流.getSideOutput(opt) 获取侧输出流
 
-10、OutputTag 声明的注意点
-
+10、OutputTag 声明的注意点； 匿名内部类
+       OutputTag opt = new OutputTag<String>("error_log"){}； // 匿名内部类的方式，泛型不会被擦除
+       OutputTag opt = new OutputTag<String>("error_log")；   // 本类方式，泛型会被擦除
 
 11、Kafka 篇：
     生产者粘性分区切换的条件：
@@ -215,26 +239,71 @@ String upsertSQL = "upsert into " + GmallConfig.PHOENIX_SCHEMA + "." + sink_tabl
                 底层是：Semantic.AT_LEAST_ONCE,
                     semantic：语义的
 
-
-
         配置参数： ProducerConfig
     FlinkKafkaConsumer:
         配置参数： ConsumerConfig
 
 
+2022.05.25
+1、获取到 FlinkKafkaProducer 后，也将数据传入到 其构造器中，需要通过  流.addSink(producer) 才可以。
+
+2、状态：
+    算子状态： 一般在 source 端或者 sink端使用
+              执行某个算子，每个并行度保存一个算子状态
+              例如：FlinkKafkaConsumer 每个并行度消费一个分区的数据，消费到当前分区哪里了，需要在自己本地的Slot 中保存这样一个消费到的状态
+        广播状态
+        列表状态
+
+       使用场景：
+            当前项目中，使用 FlinkKafkaConsumer，维护偏移量，使用到了算子状态
+            将配置流进行广播，使用到了广播状态
+    键控状态：
+
+3、is_now=0, 但是键控状态为null ，如果用户删除了访问记录，is_now=1,键控状态为null ，就得将这次的时间更新到键控状态中
+
+4、不能在声明的时候直接对状态进行初始化，因为这个时候还获取不到 RuntimeContext, 只有在 open（）生命周期方法被调用的时候，才会有 RuntimeContext
+
+5、Kafka 生产者保证精准一次性：
+    ack=-1     isr队列>=2  , isr 中活跃的 副本>=2
+    幂等性 : 单会话、单分区 的幂等性
+    事务
+
+DAU: daily Active User    日活用户
+TTL: Time To Live         失效时间
 
 
+2022.05.25
+1、Flink 是如何保证 Exactly-Once 的状态一致性的 ？
+    两阶段提交 + 状态保存
+    以 FlinkKafkaProducer 为例。 当数据到达 Sink 时，会开启事务，数据从 sink 发往 Kafka 的 topic 中时，会先标记为 预提交状态，这时消费者是消费不到这个数据的
+    我们设置了检查点，检查点从source 开始传递，经过 transform 到 sink ，当检查点分界线 barrier 到 sink后，会将状态进行备份。备份完毕后，才会进行第二次提交
+    提交完毕后，其他消费者才可以看到数据。 然后开启第二次的事务，进行下一个数据的提交
 
+2、SimpleDateFormatter 存在线程安全问题，因为底层会对 Calender 进行修改。
 
+3、Flink CEP : 当使用一个数据进行处理的时候，无法完成功能，而需要正对一个模板中的多个数据同时处理，
+               才能完成需求，则需要使用到 Flink CEP
+    Flink CEP 开发流程：
+        1、定义 Pattern
+        2、应用到流上
+        3、从流中提取数据
+        (对于 设置了模板，给定了 withIn（）,两个数据之间的时间间隔后，如果第一个数据到了，超过了withIn)
+        给定的时间后，第二个还没到，则将超时的数据放在侧输出流中
 
+TimedOutPartialMatchHandler
 
-
-
-
-
-
-
-
-
-
-
+4、对于状态的 TTL，是在状态描述器中进行设置的。具体设置如下
+    new RichFilterFunction<JSONObject>() {
+                    private ValueState<String> lastVisitDateState;
+                    @Override
+                    public void open(Configuration parameters) throws Exception {
+                        ValueStateDescriptor<String> valueStateDescriptor = new ValueStateDescriptor<>("lastVisitDateState", String.class);
+                        valueStateDescriptor.enableTimeToLive(
+                            StateTtlConfig.newBuilder(Time.days(1))
+                                //.setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)    // 默认方式
+                                //.setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)   // 默认方式
+                                .build()
+                        );
+                        lastVisitDateState = getRuntimeContext().getState(valueStateDescriptor);
+                    }
+    应该可以说 状态的很多设置都是通过状态描述器完成的，而 对于 ValueState 来说，只能 .value（） 来获取状态; .update() 来更新状态。

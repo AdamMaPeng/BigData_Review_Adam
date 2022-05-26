@@ -11,3 +11,13 @@
 
 2、为什么定义侧输出流标签 OutputTag 的时候，定义成匿名内部类的时候，就不会有泛型擦除，而定义成本类的时候，就会存在泛型擦除？？
 
+3、对于日志数据分流的时候，既然 某条日志已经 有了 error 了，将这条数据完全存放到 error 对应的 Kafka topic 中后，为什么还要 将error 去掉，对剩余其他信息进行分流？？
+
+(已解决)4、对日志数据分完流的后，写入到 Kafka 中，通过 FlinkKafkaProducer ，发送方式同 之前的 脏数据发送方式，这样不也是保证 了 Exactly-Once嘛， 为什么还有进一步保证往 Kafka 发送数据的精确一次？？
+    听课理解有误： 自己实现得消费者才需要保证精确一次性。使用 FlinkKafkaProducer发送数据，如果调用的构造器为 Semantic.EXACTLY_ONCE 的，则能保证精确一次性
+
+(已解决)5、DIM 层，通过 maxwell-bootstrap 全量同步 历史维度数据时，其他的表都可以同步到历史数据，但是 DIM_USER_INFO 的数据同步不到 ???
+
+4、 为什么不使用 Flink CDC 采集 业务数据？
+    课上讲解：FLink CDC 会采集全部表的变化，不能采集部分表的变化，不够灵活。而Maxwell 可以采集我们所需要的表变化的数据
+       但是在 Flink CDC 代码中可以配置.tableList("gmall2022_config.table_process") 的吖，这是不是有问题吖？？？
