@@ -2,6 +2,7 @@ package com.atguigu.gmall.realtime.app.dwd.log;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
+import com.atguigu.gmall.realtime.app.func.DateFormatUtil;
 import com.atguigu.gmall.realtime.util.MyKafkaUtil;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.StateTtlConfig;
@@ -18,8 +19,6 @@ import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
-
-import java.text.SimpleDateFormat;
 
 /**
  * @author Adam-Ma
@@ -87,7 +86,6 @@ public class DwdTrafficUniqueVisitorDetail {
         SingleOutputStreamOperator<String> uvDS = keyedStream.process(new KeyedProcessFunction<String, JSONObject, String>() {
             // 6.1 定义一个状态
             private ValueState<String> lastVisitState = null;
-            private SimpleDateFormat sdf = null;
 
             @Override
             public void open(Configuration parameters) throws Exception {
@@ -95,15 +93,13 @@ public class DwdTrafficUniqueVisitorDetail {
                 // 6.2 通过状态描述器设置 状态的 TTL
                 lastVisitDateDescript.enableTimeToLive(StateTtlConfig.newBuilder(Time.days(1)).build());
                 lastVisitState = getRuntimeContext().getState(lastVisitDateDescript);
-
-                sdf = new SimpleDateFormat("yyyy-MM-dd");
             }
 
             @Override
             public void processElement(JSONObject jsonObj, Context ctx, Collector<String> out) throws Exception {
                 // 6.2 获取当前用户当前 的访问时间
                 Long ts = jsonObj.getLong("ts");
-                String currentDate = sdf.format(ts);
+                String currentDate = DateFormatUtil.toDate(ts);
                 String lastVisitDate = lastVisitState.value();
                 if (lastVisitDate == null || lastVisitDate.length() == 0 || !currentDate.equals(lastVisitDate)) {
                     lastVisitState.update(currentDate);
