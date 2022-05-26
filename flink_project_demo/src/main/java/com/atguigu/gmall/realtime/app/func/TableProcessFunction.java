@@ -38,7 +38,11 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
         this.mapStateDescriptor = mapStateDescriptor;
     }
 
-    // 在 open 生命周期中 获取 Phoenix 的 JDBC 连接
+    /**
+     * 在 open 生命周期中 获取 Phoenix 的 JDBC 连接
+     * @param parameters
+     * @throws Exception
+     */
     @Override
     public void open(Configuration parameters) throws Exception {
         druidDataSource = DruidDSUtil.createDataSource();
@@ -88,7 +92,11 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
         }
     }
 
-    // 过滤 维度表使用不到的字段
+    /**
+     * 过滤维度表使用不到的字段
+     * @param dataJsonObj
+     * @param sinkColumns
+     */
     private void filterColumns(JSONObject dataJsonObj, String sinkColumns) {
         // 获取 dim 表中所有的字段
         String[] columns = sinkColumns.split(",");
@@ -98,7 +106,8 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
         entrySet.removeIf(entry -> !columnList.contains(entry.getKey()));
     }
 
-    /*
+    /**
+     * 处理配置流中的数据
      {
         Flink CDC 采集到的 配置表数据，如下
          "before":null,
@@ -113,7 +122,6 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
          "transaction":null
      }
      */
-    // 处理配置流中的数据
     @Override
     public void processBroadcastElement(String jsonStr, Context ctx, Collector<JSONObject> out) throws Exception {
         // 将 jsonStr 转换为 JSONObject
@@ -140,7 +148,13 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
         broadcastState.put(sourceTable, tableProcess);
     }
 
-
+    /**
+     * 在 Hbase 中创建出对应的 DIM维度表
+     * @param tableName
+     * @param columnStr
+     * @param pk
+     * @param ext
+     */
     private void createDimTable(String tableName, String columnStr, String pk, String ext) {
         if (ext == null) {
             ext = "";
@@ -180,6 +194,4 @@ public class TableProcessFunction extends BroadcastProcessFunction<JSONObject, S
             e.printStackTrace();
         }
     }
-
-
 }
