@@ -110,4 +110,19 @@ public class MyKafkaUtil {
                         "  'value.format' = 'json'\n" +
                         ")";
     }
+
+    /**
+     *  FLink SQL 中获取 topic_db 中的数据，创建为临时表
+     */
+    public static String getTopicDbTable(String groupId){
+        return "create table topic_db (\n" +
+                "  `database` string,\n" +
+                "  `table`    string,\n" +
+                "  `type`     STRING,\n" +
+                "  `ts`       string,\n" +
+                "  `data`     map<string, string>,\n" +
+                "  `old`      map<string, string>,\n" +
+                "  `proc_time` as proctime()\n" +
+                ") " + MyKafkaUtil.getKafkaDDL("topic_db",groupId);
+    }
 }
