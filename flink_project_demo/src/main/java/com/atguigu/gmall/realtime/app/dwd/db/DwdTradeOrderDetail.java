@@ -12,7 +12,8 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
  * @email Adam_Ma520@outlook.com
  * @phone 18852895353
  * DESC : 交易域下单事务事实表
- *
+ * 需要开启的组件：
+ *      maxwell ， zk ， kafka， DwdTradeOrderPreProcess
  * 执行流程：
  *      从 订单预处理表中获取数据， 过滤出 type = insert 的数据，就是 下单数据
  */

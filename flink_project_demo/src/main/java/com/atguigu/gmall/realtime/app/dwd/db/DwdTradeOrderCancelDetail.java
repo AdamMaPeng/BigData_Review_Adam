@@ -12,7 +12,8 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
  * @email Adam_Ma520@outlook.com
  * @phone 18852895353
  * DESC : 交易域取消订单事务事实表
- *
+ * 需要开启的组件：
+ *      maxwell, zk, Kafka , DwdTradeOrderPreProcess
  * 执行流程：
  *      1、从 DwdTradeOrderPreProcess 中过滤出 type = update  and order_status != null and order_status = 1003 的数据
  */
