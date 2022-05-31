@@ -60,6 +60,11 @@ public class MyKafkaUtil {
         return stringFlinkKafkaConsumer;
     }
 
+    /**
+     * 获取 Kafka 生产者
+     * @param topicName 需要发送数据到 的 topic 名称
+     * @return
+     */
     public static FlinkKafkaProducer<String> getKfProducer(String topicName){
         Properties props = new Properties();
         props.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, GmallConfig.KF_BOOTSTRAP_SERVER);
@@ -74,5 +79,35 @@ public class MyKafkaUtil {
         }, props, FlinkKafkaProducer.Semantic.EXACTLY_ONCE);
 
         return stringFlinkKafkaProducer;
+    }
+
+    /**
+     *  FlinkSQL中 消费 kafka 数据的 连接配置
+     * @param topidName  主题名称
+     * @param groupId    消费者组名称
+     * @return
+     */
+    public static String getKafkaDDL(String topidName, String groupId){
+        return "WITH ( 'connector' = 'kafka',\n" +
+                        "  'topic' = '" + topidName + "',\n" +
+                        "  'properties.bootstrap.servers' = ' "+ GmallConfig.KF_BOOTSTRAP_SERVER +"',\n" +
+                        "  'properties.group.id' = '"+ groupId +"',\n" +
+                        "  'scan.startup.mode' = 'group-offsets',\n" +
+                        "  'format' = 'json'\n" +
+                    ")";
+    }
+
+    /**
+     *  FlinkSQL 中向 Kafka 中发送数据的，建表的配置
+     * @param topicName 主题名称
+     * @return
+     */
+    public static String getUpsertKafkaDDL(String topicName){
+        return "WITH (  'connector' = 'upsert-kafka',\n" +
+                        "  'topic' = '"+ topicName +"',\n" +
+                        "  'properties.bootstrap.servers' = '"+ GmallConfig.KF_BOOTSTRAP_SERVER +"',\n" +
+                        "  'key.format' = 'json',\n" +
+                        "  'value.format' = 'json'\n" +
+                        ")";
     }
 }
