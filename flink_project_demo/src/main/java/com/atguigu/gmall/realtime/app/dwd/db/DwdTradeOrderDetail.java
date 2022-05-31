@@ -115,5 +115,7 @@ public class DwdTradeOrderDetail {
 
         // TODO 6. 将数据写出到 Kafka
         tableEnv.executeSql("insert into dwd_trade_order_detail select * from filtered_table");
+
+        tableEnv.executeSql("select * from dwd_trade_order_detail").print();
     }
 }
