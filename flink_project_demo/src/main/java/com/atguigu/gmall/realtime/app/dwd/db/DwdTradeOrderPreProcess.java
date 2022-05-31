@@ -145,15 +145,14 @@ public class DwdTradeOrderPreProcess {
         tableEnv.createTemporaryView("order_info", order_info);
 
         // TODO 6. 过滤出 order_detail_activity 的数据， 保留活动 id， 和 活动 规则 id , 并将 查询结果创建为临时视图
-        Table order_detial_activity = tableEnv.sqlQuery("select \n" +
+        Table order_detail_activity = tableEnv.sqlQuery("select \n" +
                 "data['order_detail_id'] order_detail_id,\n" +
                 "data['activity_id'] activity_id,\n" +
                 "data['activity_rule_id'] activity_rule_id\n" +
                 "from `topic_db`\n" +
                 "where `table` = 'order_detail_activity'\n" +
                 "and `type` = 'insert'\n");
-        tableEnv.createTemporaryView("order_detail_activity", order_detial_activity);
-        tableEnv.executeSql("select * from " + order_detial_activity);
+        tableEnv.createTemporaryView("order_detail_activity", order_detail_activity);
 
         // TODO 7. 过滤出 order_detail_coupon 的数据， 保留 优惠券 id 并将 查询结果创建为临时视图
         Table order_detail_coupon = tableEnv.sqlQuery("select\n" +
@@ -243,6 +242,6 @@ public class DwdTradeOrderPreProcess {
         // 将查询结果写入 KafkaUpsert 中的 dwd_trade_order_pre_process 表中
         tableEnv.executeSql("insert into dwd_trade_order_pre_process select * from result_table");
 
-//        tableEnv.executeSql("select * from dwd_trade_order_pre_process").print();
+        tableEnv.executeSql("select * from dwd_trade_order_pre_process").print();
     }
 }
