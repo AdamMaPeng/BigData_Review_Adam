@@ -5,18 +5,13 @@ import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.atguigu.gmall.realtime.util.MyKafkaUtil;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
-import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
@@ -61,21 +56,21 @@ public class DwdTrafficBaseLogSplit {
 
         // TODO 2.检查点设置
         // 2.1 开启检查点
-        env.enableCheckpointing(5000L, CheckpointingMode.EXACTLY_ONCE);
+//        env.enableCheckpointing(5000L, CheckpointingMode.EXACTLY_ONCE);
         // 2.2 设置超时时间 ： 若设置检查点时，网络不畅，一直设置不成功，最大的超时设置时间，如果超时则抛异常
-        env.getCheckpointConfig().setCheckpointTimeout(60000L);
+//        env.getCheckpointConfig().setCheckpointTimeout(60000L);
         // 2.3 两个检查点之间的间隔
-        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(2000L);
+//        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(2000L);
         // 2.4 Job 取消时，检查点是否保留
-        env.getCheckpointConfig().enableExternalizedCheckpoints(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
+//        env.getCheckpointConfig().enableExternalizedCheckpoints(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
         // 2.5 重启策略
-        env.setRestartStrategy(RestartStrategies.failureRateRestart(3, Time.days(30), Time.milliseconds(50L)));
+//        env.setRestartStrategy(RestartStrategies.failureRateRestart(3, Time.days(30), Time.milliseconds(50L)));
         // 2.6 状态后端
-        env.setStateBackend(new HashMapStateBackend());
+//        env.setStateBackend(new HashMapStateBackend());
         // 2.7 将检查点保存在 hdfs 中
-        env.getCheckpointConfig().setCheckpointStorage("hdfs://hadoop102:8020/gmall/ck/applog");
+//        env.getCheckpointConfig().setCheckpointStorage("hdfs://hadoop102:8020/gmall/ck/applog");
         // 2.7 将操作HDFS用户改为 atguigu
-        System.setProperty("HADOOP_USER_NAME", "atguigu");
+//        System.setProperty("HADOOP_USER_NAME", "atguigu");
 
         // TODO 3.读取 Kafka 中 topic_log中的数据
         // topic 名称
