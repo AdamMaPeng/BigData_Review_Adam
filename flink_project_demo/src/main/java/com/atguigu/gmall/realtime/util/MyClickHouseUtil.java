@@ -21,7 +21,7 @@ import java.sql.SQLException;
  * DESC : 操作 ClickHouse 工具类
  *  由于每次操作的类型不一样
  */
-public class ClickHouseUtil {
+public class MyClickHouseUtil {
     public static <T>SinkFunction <T>getJdbcSink(String sql){
         SinkFunction<T> sinkFunction = JdbcSink.sink(
                 sql,
