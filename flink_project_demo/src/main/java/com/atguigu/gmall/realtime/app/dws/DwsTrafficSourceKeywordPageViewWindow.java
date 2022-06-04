@@ -3,7 +3,7 @@ package com.atguigu.gmall.realtime.app.dws;
 import com.atguigu.gmall.realtime.app.func.KeywordUDTF;
 import com.atguigu.gmall.realtime.bean.KeywordBean;
 import com.atguigu.gmall.realtime.common.GmallConstant;
-import com.atguigu.gmall.realtime.util.ClickHouseUtil;
+import com.atguigu.gmall.realtime.util.MyClickHouseUtil;
 import com.atguigu.gmall.realtime.util.MyKafkaUtil;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
@@ -22,7 +22,7 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
  * @email Adam_Ma520@outlook.com
  * @phone 18852895353
  * DESC : 流量域来源关键词粒度页面浏览各窗口轻度聚合
- *
+ *  实现方案： FlinkSQL API
  * 需要开启的组件：
  *      flume , zk, Kafka , [HDFS],DwdTrafficBaseLogSplit, DwsTrafficSourceKeywordPageViewWindow
  * 执行流程：
@@ -137,7 +137,7 @@ public class DwsTrafficSourceKeywordPageViewWindow {
         keywordBeanDS.print(">>>>");
 
         // TODO 8.将流中的数据写入到 ClickHouse 中
-        keywordBeanDS.addSink(ClickHouseUtil.<KeywordBean>getJdbcSink("insert into dws_traffic_source_keyword_page_view_window values(?,?,?,?,?,?)"));
+        keywordBeanDS.addSink(MyClickHouseUtil.<KeywordBean>getJdbcSink("insert into dws_traffic_source_keyword_page_view_window values(?,?,?,?,?,?)"));
 
         env.execute();
     }
