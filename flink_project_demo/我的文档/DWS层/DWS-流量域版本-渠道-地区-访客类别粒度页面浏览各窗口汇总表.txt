@@ -1,0 +1,53 @@
+                                                          DWS-流量域版本-渠道-地区-访客类别粒度页面浏览各窗口汇总表
+1、统计指标：
+    分组维度：
+        渠道
+        版本
+        地区
+        访客类别
+    度量值：
+        会话数：     last_page_id == null ----》 为一个会话
+        页面浏览数：  来一个日志数据，则记 1 次 浏览
+        浏览总时长：  来一个日志
+
+        会话数、页面浏览数、浏览总时长       (dwd_traffic_page_log)
+        独立访客数                         (dwd_traffic_unique_visitor_detail)
+        跳出会话数                         (dwd_traffic_user_jump_detail)
+
+DESC : 流量域版本-渠道-地区-访客类别 粒度 页面浏览各窗口轻度聚合
+     实现方案： Flink API
+     当前需要统计的是
+         维度：
+             渠道
+             地区
+             版本
+             访客类别
+         度量值：
+             会话数     last_page_id == null || last_page_id.length() == 0
+             页面浏览数  1 page_log----> 1 次浏览
+             浏览时长    1 page log ---> duration
+             独立访客数   从 独立访客事务事实表中获取，来一条数据，记一次
+             用户跳出数   从 用户跳出事务事实表中获取，来一条，记一次
+需要开启的组件：
+    flume , zk,  Kafka , DwdTrafficBaseLogSplit,DwdTrafficUniqueVisitorDetail,DwdTrafficUserJumpDetail,DwsTrafficVcChArIsNewPageViewWindow
+执行流程：
+     1、 flume 将神策大数据提供的当前项目的前端埋点日志，采集到 Kafka topic_log 主题中，作为ODS层数据
+     2、 通过 FlinkKafkaConsumer 消费 topic_log 中的数据
+     3、 将消费到的数据进行分流，分流到如下各主题中， 作为 流量域事务事实表
+             流量域启动日志事务事实表        dwd_traffic_start_log
+             流量域页面日志事务事实表        dwd_traffic_page_log
+             流量域动作日志事务事实表        dwd_traffic_action_log
+             流量域曝光日志事务事实表        dwd_traffic_display_log
+             流量域错误日志事务事实表        dwd_traffic_error_log
+     4、当前汇总需求中，对于 页面浏览数、会话数、浏览时长，都可以从 dwd_traffic_page_log 中获取到
+     5、对于汇总需求中，独立访客数 可以通过 dwd_traffic_uniquq_visitor_detail 主题中获取到
+     6、对于汇总需求中，用户跳出数 可以通过 dwd_traffic_user_jump_detail 主题中获取到
+     7、将获取到的数据，都转换成相同的格式 ，当前转换为实体类：TrafficPageViewBean
+     8、由于当前的维度是 ： 渠道 - 地区 - 版本  - 访客类别，在建立ClickHouse 表的时候，使用的引擎是 ReplacingMergeTree，
+         并且 order(stt, edt, vc, ch, ar, is_new), 当按照 维度分组，然后开窗聚合后，将数据写入到 ClickHouse中，
+         对于三个流来说，肯定有同一时刻（分区相同）维度相同的数据，那么保存到 ClickHouse 中就会去重到只剩下一条，
+         所以需要将三条流进行 union 合并，然后再写入到ClickHouse 中
+     9、设置水位线
+     10、分组（按照维度： 渠道 - 地区 - 版本  - 访客类别）
+     11、开窗、聚合
+     12、写入到 ClickHouse 中
