@@ -1,23 +1,116 @@
-1、设置并行度的时候，
-    假设Kafka 中 topic 的分区数为4，设置并行度为 2：
-         每个并行子任务相当于消费者组中的一个消费者，一个消费者消费 2 个分区的数据
-         这样没问题，只是这样消费效率会低一些
-    但是
-    假设kafka 中 topic 的分区数为2，设置并行度为 4，
-        下游算子拿不到其中两个并行子任务中数据的水位线，后续的开窗、定时任务则无法触发
-        会存在问题
+【已解决】1、为什么Flink 程序设置并行度的时候，设置的并行度 和 Kafka 中的 topic 的分区数相同呢？
+   【
+        1）从消费的角度考虑。
+            假设 Num(并行度) = Num(partition):
+                    并行度构成一个消费者组，一个并行度作为消费者组中的一个消费者，一个消费者消费一个分区的数据，
+                 正好可以保证消费 Kafka 中的数据，数据有序问题。因为 Kafka 中的数据有序是单分区内有序。
+            假设 Num(并行度) > Num(partition):
+                    这样可以保证所有的分区中的数据都被一个消费者消费，但是会空闲出没有消费到数据的并行子任务。
+                    那么在下游如果存在一个并行度为1 的算子，此时该算子就会等待上游算子的所有并行子任务的水位线
+                 全部到齐，然后选出最小的水位线，向下游传播。
+                    这时由于 若干没有消费到数据的并行子任务没有数据过来，则没法获取到水位线，所以就会让下游算子
+                 一直处于等待状态，那么程序就会一直被阻塞状态。则后续的开窗，定时任务等的操作则无法触发。
+            假设 Num(并行度) < Num(partition):
+                这样构成的消费者组，会存在一个消费者去消费多个分区的数据，这样也是可以的，只不过不能保证数据有序，
+                以及消费的效率会大大降低
+        2）从下游获取到水位线的角度考虑
+            对于这个角度，主要就是 Num(并行度) > Num(partition)， 下游算子会一直等待上油并行子任务水位线的情况。
 
-    所以，综上所述，设置读取kafka中topic的分区数据，设置的并行度需要等于topic 的分区数
+        so，综上所述，需要将 Num(并行度) = Num(parition)
+   】
 
-2、为什么定义侧输出流标签 OutputTag 的时候，定义成匿名内部类的时候，就不会有泛型擦除，而定义成本类的时候，就会存在泛型擦除？？
+【为解决】2.为什么定义侧输出流标签 OutputTag 的时候，定义成匿名内部类的时候，就不会有泛型擦除，而定义成本类的时候，就会存在泛型擦除？？
+    【
+        泛型的类型擦除：
+             List<String> list1=new ArrayList<String>();
+             List<Integer> list2=new ArrayList<Integer>();
+             System.out.println(list1.getClass()==list2.getClass());      // true
+           虽然ArrayList<String>和ArrayList<Integer>在编译时是不同的类型，但是在运行的时候，编译器会将两种数据类型简化为 ArrayList。
+           为什么要进行泛型擦除呢？
+                如果不进行泛型擦除，则ArrayList<String> ，ArrayList<Integer> 都算一种数据类型。以此类推，必然会引起类型的数量爆炸。
+                而进行泛型擦除，则避免过多的创建类，占用太多的内存资源
+        为什么匿名内部类就不会进行泛型擦除呢？
+    】
 
-3、对于日志数据分流的时候，既然 某条日志已经 有了 error 了，将这条数据完全存放到 error 对应的 Kafka topic 中后，为什么还要 将error 去掉，对剩余其他信息进行分流？？
+【已解决】3、对于日志数据分流的时候，既然某条日志已经是error了，将这条数据完全存放到error对应的 Kafka topic中后，为什么还要将error去掉，对剩余其他信息进行分流？？
+    【
+        虽然已经出现了 error ，但是不影响当前的 log 中包含其他的信息，
+        如果有这样的需求，统计今天 A 用户一共浏览了多少个页面， 虽然A 用户浏览的页面中有若干日志 是 error，但不妨碍我们进行需求的统计
+        所以还是需要将error 中的 page 信息提取出来的
+    】
+【已解决】4、对日志数据分完流的后，写入到 Kafka 中，通过 FlinkKafkaProducer ，发送方式同 之前的 脏数据发送方式，这样不也是保证 了 Exactly-Once嘛， 为什么还有进一步保证往 Kafka 发送数据的精确一次？？
+    【
+        听课理解有误： 自己实现得消费者才需要保证精确一次性。
+        使用 FlinkKafkaProducer发送数据，如果调用的构造器为 Semantic.EXACTLY_ONCE 的，则能保证精确一次性
+    】
 
-(已解决)4、对日志数据分完流的后，写入到 Kafka 中，通过 FlinkKafkaProducer ，发送方式同 之前的 脏数据发送方式，这样不也是保证 了 Exactly-Once嘛， 为什么还有进一步保证往 Kafka 发送数据的精确一次？？
-    听课理解有误： 自己实现得消费者才需要保证精确一次性。使用 FlinkKafkaProducer发送数据，如果调用的构造器为 Semantic.EXACTLY_ONCE 的，则能保证精确一次性
+【已解决】5、DIM 层，通过 maxwell-bootstrap 全量同步 历史维度数据时，其他的表都可以同步到历史数据，但是 DIM_USER_INFO 的数据同步不到 ???
 
-(已解决)5、DIM 层，通过 maxwell-bootstrap 全量同步 历史维度数据时，其他的表都可以同步到历史数据，但是 DIM_USER_INFO 的数据同步不到 ???
-
-4、 为什么不使用 Flink CDC 采集 业务数据？
+【已解决】4、 为什么不使用 Flink CDC 替换 maxwell 采集 业务数据？
     课上讲解：FLink CDC 会采集全部表的变化，不能采集部分表的变化，不够灵活。而Maxwell 可以采集我们所需要的表变化的数据
        但是在 Flink CDC 代码中可以配置.tableList("gmall2022_config.table_process") 的吖，这是不是有问题吖？？？
+    【
+        1、通过Flink CDC 采集的数据，无法保证 ODS 层业务数据的完成性
+        2、Flink CDC 是 Flink 1.11 出现的，这时只支持 Mysql 和 PostgreSQL 两种数据库，
+            我们项目使用的是Flink 1.12 ，担心可能存在兼容性问题
+        3、1）因为 maxwell 是将 维度数据 和事实数据都采集到了 topic_db 当中，采集的是最新变化的数据
+           2）如果 通过 Flink CDC 读取 维度数据和 事实数据最新的变化，则  Flink CDC 中的 .startUpOptions(StartUpOptions.lastest())
+           需要这样设置。
+              而对于维度数据，除了最新的数据之外，我们还需要历史的维度数据，则还要维护一套代码.startUpOptions(StartUpOptions.initial())
+           这种方式会对需要捕获的数据库相应的表进行一次全量快照，然后读取binlog 最新变化。
+                /**
+                * Performs an initial snapshot on the monitored database tables upon first startup, and
+                * continue to read the latest binlog.
+                */
+               public static StartupOptions initial() {
+                   return new StartupOptions(StartupMode.INITIAL, null, null, null);
+               }
+           如果采用Flink CDC 替换 maxwell 完成 gmall 数据库中所有表的采集，则需要针对 维度相关的表 和 事实相关的表维护两套代码，
+           这样明显很繁琐。而采用 maxwell的方式，真对所有的表数据都采集 binlog 中的变化数据，而针对 需要进行全量同步的，则只需要
+           执行 maxwell-bootstrap 命令即可。 命令的方式，相对于修改代码的方式，明显方便的多。
+    】
+
+
+
+2022.05.31
+【已解决】1、DWD 层中： 工具域优惠券使用事务事实表，文档中是直接从 topic_db 中获取 ,
+    过滤出 table=coupon_use 且 为update， coupon_status 1401--》 1402
+  可以改成 直接从 dwdToolCouponGet 中获取， using_time！= null, used_time=null, expire_time=null
+  【上课讲过】
+
+2022.06.01
+【已解决】1、指派水位线的时候， timestamp（3）中的 3 是什么意思嘞？ 和 timestamp 有什么不同呢？
+    CREATE TABLE Orders (
+        `user` BIGINT,
+        product STRING,
+        order_time TIMESTAMP(3),
+        WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND
+    ) WITH ( . . . );
+
+    【3代表了精度】
+
+【已解决】2、对于不想保存到数据库中的字段，使用 transient 关键字修饰的字段，只是不参与序列化和反序列化，
+            但是当前我们只是不想将某个字段保存到数据库中，就需要使用一个标记来进行指示
+     【
+        所以，给某个不想保存到 数据库中的字段，我们可以添加一个不影响功能的标记 ------ 注解
+     】
+
+【已解决】3、流量域版本-渠道-地区-访客类别粒度页面浏览各窗口汇总表 中 进行分组，使用  版本-渠道-地区-访客类别 构成这样的 string ，是不是也可以进行分组嘞？
+    【
+        对于分组场景来说，只要可以将相同的类型的数据都发送到同一组内即可，选择更加合适的方式就行啦
+    】
+
+2022.06.02
+1、【已解决】流量域首页、详情页独立访客聚合 这个汇总需求，可不可以直接从 独立访客事务事实表中获取数据，然后过滤出 page_id == home 和 page_id = detail 的
+   然后再进行后续的开窗聚合操作呢？
+   【
+        之前 dwd中做的 流量域独立访客事务事实表，是针对一整天的独立访客。
+        而当前的 首页、详情页则针对的就是这两个页面的每天的独立访客。
+        场景A: 用户A 今日先点击了 首页一次，然后点击了 详情页一次。
+            那么对于 DWD 层进行统计的时候，会先过滤掉 last_page_id != null，也就是先将跳转的数据先过滤掉。
+                然后会判断状态中保存的时间和当前 page_log 中的时间是否相同，相同表明当前 page_log这条记录不是独立访客的。
+                也就是不管一个用户今天浏览了多少个页面，只要 mid 相同，都会只保留一条 page_Log ，也就是最先到达的 page_log
+                对于场景A 来说，只会保留 首页这一条日志数据。
+            而对于当前 dws 中的 首页，详情页的独立访客，则针对这两个页面来说，当前时间，只要是第一次登录 首页 或者详情页的用户，都会被记录下来。
+                对于场景A 来说，则会保留 首页， 详情页两个页面。
+   】

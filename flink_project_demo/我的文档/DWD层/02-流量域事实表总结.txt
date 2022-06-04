@@ -57,7 +57,7 @@
 
 技术点：
     状态编程： 状态的过期时间设置
-         // TODO 6.利用状态过滤掉今天已经访问的访客
+         // 利用状态过滤掉今天已经访问的访客
             SingleOutputStreamOperator<String> uvDS = keyedStream.process(new KeyedProcessFunction<String, JSONObject, String>() {
                 // 6.1 定义一个状态
                 private ValueState<String> lastVisitState = null;
@@ -111,7 +111,7 @@
 
     Flink CEP 编程
 
-
+current_row_timestamp()
 
 
 

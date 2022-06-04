@@ -32,7 +32,9 @@
 
 4、lombok 注解
         可以简化开发，但是一般在公司时候需要使用，还是需要看一下其他同事是否在用，然后再评估是否使用。
-        @Data : 可以使我们编写的 JavaBean 少些很多代码，会自动添加 getter/setter，toString
+        @Data : 可以使我们编写的 JavaBean 少些很多代码，会自动添加 getter/setter，toString ， equals
+        @AllArgsConstructor : 提供全参构造器
+        @NoArgsConstructor  : 提供无参构造器
 
 5、Flink CDC 连接问题：
         方案1：在cdc连接的代码那 你加一个 .debeziumProperties(props) Properties props = new Properties().setProperty("jdbc.properties.useSSL","false")
@@ -59,7 +61,7 @@
              ctx 为环境上下文对象
         broadcastState.put(sourceTable, tableProcess)
 
-12、将数组转换成 Array ：
+12、将数组转换成 List ：
         String[] arr = new String[5];
         List<String> list = Arrays.asList(arr)
 
@@ -188,6 +190,7 @@ String upsertSQL = "upsert into " + GmallConfig.PHOENIX_SCHEMA + "." + sink_tabl
         Job取消时，检查点是否保存
         重启策略
         状态后端
+        检查点存储位置
         HDFS 操作用户设置为 有权限读写的用户
 
     2）JDBC执行sql套路
@@ -307,3 +310,411 @@ TimedOutPartialMatchHandler
                         lastVisitDateState = getRuntimeContext().getState(valueStateDescriptor);
                     }
     应该可以说 状态的很多设置都是通过状态描述器完成的，而 对于 ValueState 来说，只能 .value（） 来获取状态; .update() 来更新状态。
+
+2022.05.26
+1、interval join
+    1） 语法：
+          empWM
+              .keyBy(emp -> emp.getDeptno())
+              .intervalJoin(deptWM.keyBy(dept -> dept.getDeptno()))
+              .between(Time.seconds(-5), Time.seconds(5))
+              .process();
+    2） 底层：
+            connect （） +  维护了两条流的状态
+         数据到来先判断是否迟到，如果不是迟到了，先将数据放入缓存中，然后使用当前流的元素与另一条流缓存的元素来关联
+         缺点，只能实现 inner join
+    3）实现的功能： inner join
+    4）时间范围内的数据的状态都会被维护起来。
+
+2、Flink SQL :
+    1)操作步骤：
+        流执行环境
+            StreamExecutionEnvrioment env = StreamExecutioEnvrioment.getExecutionEnviroment();
+        设置并行度
+            env.setParalliem(1);
+        流中表的环境：
+                StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
+        将流转换为动态表：
+                tableEnv.createTemporaryView("emp",empDS);
+
+         //默认历史状态永不失效，如果需要设置失效时间，则可以按照如下方式设置
+         tableEnv.getConfig().setIdleStateRetention(Duration.ofSeconds(5));
+
+    2）连接方式
+      普通join ： 维护两个状态
+        inner join      ： 状态更新类型: UpdateType  左表： OnCreateAndWrite       右表：OnCreateAndWrite
+            默认会将历史状态 的数据进行保存，然后进行内联接
+
+        left outer join ：  状态更新类型: UpdateType  左表： OnReadAndWrite         右表：OnCreateAndWrite
+            如果左边中的数据对应的右边中的数据没有，则此时只有左边的数据，左表数据标记为 +I
+            当右表的数据出现后，左表中的数据会进行回撤，称之为回撤流（rewrite），回撤数据被标记为+D
+            然后会将左表和右表进行连接，此时标记为 +I
+
+        right outer join :  状态更新类型: UpdateType  左表： OnCreateAndWrite        右表：OnReadAndWrite
+
+        tableEnv.getConfig().setIdleStateRetention(Duration.ofSeconds(10));
+        设置状态保存时间，默认情况下，使用普通连接，状态会永久保存在内存中，但是很多场景下，历史状态数据是不需要一直保存的，尤其实时计算
+
+      LookUp ： 不会维护状态
+        1、专门用于进行维度关联的连接方式。 将事实表作为左表，需要维度退化的表作为右表，然后左表提供一个处理时间
+        2、可以直接读取 mysql 中的数据
+        3、在将通过 LookUp 读取到的维度表数据 与实时表进行关联的时候，需要在实时表中存在一个处理时间的字段。 proc_time as proctime()
+        4、并且在进行关联的时候，需要指示出 事实表中处理时间字段，因为一般维度表的数据不会频繁发生改变，而实时表中的数据则是不断变化的。
+        我们希望得到事实表最新的数据对应的维度信息。
+            如 通过 LookUp 读取到 mysql 中的 dept（维度），通过 kafka 读取到的 emp（实时表），将两张表进行关联的时候
+            select
+                e.empno,
+                e.ename,
+                e.deptno,
+                d.dname
+            from emp e
+            join dept for system_time as of e.proc_time d
+            on e.deptno = d.deptno;
+        官方解释： LookUp 通常用于使用从外部系统查询的数据来丰富表。LookUp要求一个表具有处理时间属性，而另一个表由查找源连接器支持。
+                  LookUp 使用上面的处理时间临时连接语法和由查找源连接器支持的正确表
+
+    3）将表中的数据写入到 Kafka
+        步骤：
+           Kafka的方式：适合于作为消费者使用
+                1）添加 Flink SQL的依赖
+                2）创建一张表，通过Kafka 的方式 （Flink 官网中去查）
+                    CREATE TABLE KafkaTable (
+                      `user_id` BIGINT,
+                      `item_id` BIGINT,
+                      `behavior` STRING,
+                      `ts` TIMESTAMP(3) METADATA FROM 'timestamp'
+                    ) WITH (
+                      'connector' = 'kafka',
+                      'topic' = 'user_behavior',
+                      'properties.bootstrap.servers' = 'localhost:9092',
+                      'properties.group.id' = 'testGroup',
+                    )
+                3） tableEnv.executeSQL()
+                    如果通过 insert into table select * from A left outer join B ;
+                        由于当右表中的数据不存在时，左表数据存在，下次右表数据过来后，会有 Delete 操作
+                      'scan.startup.mode' = 'earliest-offset',
+                      'format' = 'csv'
+                        那么对于当前这种方式就是不合适的。
+                        会报错： doesn`t support consuming update and delete changes which is produced by node Join
+                4) 在从 Kafka 中消费数据，然后将消费的数据创建为 Flink SQL 中的表的时候，需要将 消费到的数据的各个属性隐射为 创建的
+                   Kafka 动态表的各个字段。这时就需要将 表中的字段要与消费到得数据的属性一样，表中的字段去找相同的消费到数据的属性，进行匹配
+                   消费到的数据属性，可以比表中的字段数据多
+                5）对于消费到的数据为 Json 格式，如果json 中某个属性的数据又是 Json ，此时需要将 表中对应字段的数据类型设置为 map 结构，
+                   可以查看官网 中 开发 - 数据类型
+                   map<String, String>
+
+           UpsertKafka的方式：适合于作为生产者使用
+                作为生产者时，创建对应的表，必须提供主键，否则会报：
+                    ‘upsert-kafka' table require to define a PRIMARY KEY constraint.
+
+    4）如果读取的是 mysql 数据库中的数据，将mysql 中的数据作为 Flink SQL中的表的数据
+        可以通过 FlinkSQL 提供的 JDBC方式连接 Mysql ，除此之外，还提供
+            PostgreSQL
+            Derby
+        LookUp 缓存是用来提升有 JDBC 连接器参与的 时态关联性能的。默认情况下，缓存是没有开启的，所有请求都会被发往数据库
+        当缓存启用时，每个进程（即 TaskManager）维护一份缓存。收到请求时，Flink 会先查询缓存，如果缓存未命中才会向外部数据库发送请求，
+        并用查询结果更新缓存。如果缓存中的记录条数达到了 lookup.cache.max-rows 规定的最大行数时将清除存活时间最久的记录。
+        如果缓存中的记录存活时间超过了 lookup.cache.ttl 规定的最大存活时间，同样会被清除
+
+        如 emp 作为事实表，需要包含一个处理时间：
+            CREATE TABLE emp (\n" +
+                "  empno BIGINT,\n" +
+                "  ename string,\n" +
+                "  deptno bigint,\n" +
+                "  proc_time as proctime()\n" +     // 处理时间可以通过 proc_time as proctime() 函数进行获取
+                ")
+
+        通过 lookUp 方式进行关联查询
+        SELECT
+            e.empno,e.ename,e.deptno,d.dname
+        FROM
+            emp e
+        JOIN
+            dept FOR SYSTEM_TIME AS OF e.proc_time d   // 使用 LookUp时，需要指定一个处理时间给对应的事实表，也就是让维度表通过 对应的处理时间去找事实表
+        ON e.deptno = d.deptno
+
+    5）对于 Flink SQL 来说，SQL本身是可以 提交的，所以 env.execute() 可以省略
+
+    6）当执行了 查询语句，获取到 Table 对象，此时如果直接通过
+        tableEnv.executeSql("select * from cart_add");  --- 此种方式会将 tableName 当成变量名，而不是表名
+        经过 Flink SQL 连续查询后，得到的依然是动态表，如果想要 Flink 知道查询的结果是动态表，需要进行注册，
+        注册的两种方式：
+            方式一：直接使用 sql 拼接 上 Table cart_add = tableEnv.sqlQuery();
+               tableEnv.executeSql("select * from " + cart_add);
+               这种方式会调用 Table cart_add 的toString 方法，而 Table 的toString 方法内部会将 cart_add 注册为 Flink SQL 中的一张表
+            方式二：
+                tableEnv.registTable(cart_add) ; // 这种方式过时了，使用 createTemporaryView 进行替换（）
+                tableEnv.createTemporaryView("cart_add", cart_add);
+
+    7) tableEnv.executeSql() 直接执行 sql ，不需要进行注册
+       tableEnv.sqlQuery() : 得到的是 Table 变量，需要进行注册
+
+2022.05.28
+1、FlinkSQL 中的 Join 操作
+    1、Flink 原生API 中提供 ： interval join ----- 只能实现 inner join ，功能比较局限
+    2、Flink SQL提供的join ：  -- 维护了两个状态 UpdateType（enum） -- Disabled, OnReadAndWrite, OnCreateAndWrite
+        完成 FlinkSql ，基本的操作 步骤：
+             前提：添加相对应的依赖
+            // 1.1 流执行环境
+            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            // 1.3 将 流执行环境创建为 流表环境
+            StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
+            // 获取数据源
+            DataStream empDS = env.socket("hadoop102", 8888);
+            // 将数据源创建为临时视图
+            tableEnv.createTemporaryView("emp" , empDS);
+            注意：1）通过流创建的动态表就可以直接使用了。
+                        tableEnv.createTemporaryView("emp", empDS);
+                    可以直接 tableEnv.executeSql("select * from emp");
+                 2) tableEnv.executeSql();后并不能直接打印在控制台，依然需要 调用 print() 这个下沉算子
+                    tableEnv.executeSql().print();  // FlinkSql 会自动提交执行，不用 env.execute()
+    支持的基本 join ：维护两个状态
+        inner join        :
+            左表： OnReadAndWrite
+            右表：  OnReadAndWrite
+        left outer join   :
+            左表： OnReadAndWrite
+            右表： OnCreateAndWrite
+        right outer join  :
+            左表： OnCreateAndWrite
+            右表： OnReadAndWrite
+        full outer join   :
+           左表： OnReadAndWrite
+           右表：  OnReadAndWrite
+            tableEnv.executeSql("select e.empno, e.ename, d.deptno, d.deptname from emp e full join dept d on e.deptno = d.deptno")
+               .print();
+       注：1）FlinkSQL中 默认的状态是一直有效的，但是某些情况，对于状态我们希望是有时效性的，
+            可以通过： tableEnv.getConfig().setIdleStateRetention()  来设置状态的有效期
+           2）FlinkSQL 中 executeSql 会自动调用程序执行，所以不需要再 env.execute();
+
+2、执行 FlinkSQL ： tableEnv.executeSql(sqlStr);
+    注意 ： sqlStr 这个sql 字符串中不能有 分号 “ ; ” , 否则会报错
+    org.apache.calcite.sql.parser.SqlParseException: Encountered ";"
+
+3、查询缓存（LookUp Cache）方式
+    为什么会有 LookUp 方式？
+        LookUp 缓存是用来提升有 JDBC 连接器参与的 时态关联性能的。
+        默认缓存方式时没有开启的，会去 JDBC所连接的数据库进行查询。
+        当开启了后，先查缓存，没有结果再查 数据库
+
+        JDBC 连接器可以作为时态表关联中的查询数据源（又称维表）。目前，仅支持同步查询模式
+
+    如何开启 LookUp 缓存方式？
+        默认情况下，查询缓存（Lookup Cache）未被启用，需要设置 ， 可以在 维度表中添加这两个配置
+            lookup.cache.max-rows
+            lookup.cache.ttl 参数来启用此功能。
+
+            "CREATE TABLE dept (\n" +
+                            "  deptno bigint,\n" +
+                            "  dname string,\n" +
+                            "  ts bigint\n" +
+                            ") WITH (\n" +
+                            "   'connector' = 'jdbc',\n" +
+                            "   'url' = 'jdbc:mysql://hadoop102:3306/gmall2022_config',\n" +
+                            "   'table-name' = 't_dept',\n" +
+                            "   'username' = 'root',\n" +
+                            "   'password' = 'root',\n" +
+                            "   'lookup.cache.max-rows' = '200',\n" +
+                            "   'lookup.cache.ttl' = '1 hour',\n" +
+                            "   'driver'='com.mysql.cj.jdbc.Driver'" +
+                            ")");
+
+4、LookUp Join
+    通常在 Flink SQL 表和外部系统查询结果关联时使用。
+
+    这种关联要求一张表（主表）有处理时间字段，而另一张表（维表）由 Lookup 连接器生成。
+    	Lookup Join 做的是维度关联，而维度数据是有时效性的，那么我们就需要一个时间字段来对数据的版本进行标识。因此，Flink 要求我们提供处理时间用作版本字段。
+    	此处选择调用 PROCTIME() 函数获取系统时间，将其作为处理时间字段。
+
+    	inner join dept for system_time as of e.proc_time d;
+
+    注意事项：
+        1、事实表需要提供 proc_time
+        2、连接查询的时候， 需要在 开启了 LookUp 的表 中 ：
+            inner join dept for system_time as of e.proc_time d;
+
+2022.05.29
+1、 macros 宏命令
+
+1、Flink 中的自定义函数？
+    标量函数---- UDF
+    表值函数---- UDTF
+    聚合函数---- UDAF
+
+    对于分词场景，需要使用 表值函数---UDTF ,步骤如下
+        1、继承  org.flink.apache.table.functions.TableFunction  类， 实现  eval（） 方法
+
+2、电商业务知识
+    1）搜索后的页面 ： good_list 商品列表页面
+
+3、Flink SQL
+    炸裂：
+        select keyword, rowtime from filterTable, Lateral table(ik_analyze(fullword)) t(keyword)
+    获取系统当前时间：
+        unix_timestamp() : 获取 时间戳的
+        current_row_timestamp() : 获取时间的 yyyy-MM-dd HH:mm:ss.xxx
+        proctime() :获取时间的 yyyy-MM-dd HH:mm:ss.xxx
+    将 flink SQL 中的表转换为 流：  (因为 Flink SQL 没有提供将 sql 的数据写入到 ClickHouse 中的支持，但是Flink 支持将流数据写入到 ClickHouse 中)
+        table.toAppendStream()  ： 如果只是追加操作，则使用追加流
+        table.toRetractStream() ：如果会对数据进行修改，使用回撤流
+    转换为流的过程中，肯定也需要将查询的结果封装为对应的实体类，通过实体类封装每一个查询结果
+
+4、Flink 往其他的输出端输出，如何保证 精确一次？
+    Kafka ： 两阶段提交 + 事务 +  检查点机制
+    Phoenix ：幂等性
+    ClickHouse ： replacingMergeTree 可以帮助做去重操作
+                  replicateMergeTree 保证数据不丢失（副本表）
+
+5、遵循 JDBC规范的数据库
+    Mysql
+    Phoenix
+    ClickHouse
+
+ClickHouse 专题：
+1、ClickHouse如何保证幂等性？？
+
+2、ClickHouse 分片？
+
+3、ClickHouse 副本？
+
+4、ClickHouse 是否可以保证精准一次性？
+    严格来说，保证不了，但是可以通过一些手段保证 ClickHouse 的精准一次性
+    1、创建表的时候，可以使用
+        副本引擎（ReplicateMergeTree）--》 可以保证成批数据过来后的一致性，
+          如第一次 A,B,C,D ;第二次也是 A,B,C,D，那么第二次的 A,B,C,D 就会被过滤掉。
+          但如果第二次是， A,E,F,G; 那么对于 A数据来说，是没法进行去重的。
+          可以整个批次进行过滤
+    2、创建表的时候，指定了 副本引擎（ReplicateMergeTree）后，同时指定去重引擎（ReplacingMergeTree）
+           虽然插入数据的时候不能立即去重，但是
+                可以在查询的时候，通过 optimize 来手动触发进行去重
+           但有更好的方式：可以在查询的时候，在查询语句后 加上 finall
+
+    总结：建表的时候 ReplicateMergeTree 、ReplacingMergeTree
+         查询的时候 加上 finall
+         这样就可以保证精确一次性啦
+
+2022.05.30
+学习 ClickHouse内容，
+笔记见：E:\WorkSpace\BigData_Review_Adam\clickhouse_demo\src\我的文档\ClickHouse总结.txt
+
+2022.05.31
+1、consignee ：收货人
+              英式:[ˌkɒnsaɪˈniː];美式:[ˌkɑːnsaɪˈniː]
+
+2、current_row_timestamp（） ： flinkSql 中获取某一行的插入时间
+
+3、sql 中指定 watermark ？ 如何指定，什么时候指定？
+    肯定是在创建表的时候指定 wm ，如何指定，那就从官网中查看 建表语句，看看建表语句中是如何指定 wm 的
+
+4、为什么 OLAP 选用的是 ClickHouse ？
+    １、提供 的是 SQL 语法， 上手容易  （类比 ES 的 SDL 简直太有好了）
+    2、列式存储，分析起来快速
+    3、性能是目前 OLAP 中最高的， 优于 Impala , Kylin ,因为 ClickHouse 即使是查询单条sql ，也会占用全部 的 CPU资源
+    4、分片、副本
+    5、提供了丰富的引擎，建表的时候保存在什么位置，支不支持切片，索引
+
+2022.06.01
+1、Flink SQL 中的 timestamp 为：
+    Data type of a timestamp without time zone consisting of year-month-day hour:minute:second[.fractional] with up to nanosecond precision
+    and values ranging from 0000-01-01 00:00:00.000000000 to 9999-12-31 23:59:59.999999999.
+
+2、FlinkSQL 中的几种时间函数：
+    unix_timestamp()         : 返回当前时间戳
+    current_row_timestamp()  : 返回 'yyyy-MM-dd HH:mm:ss' 的时间
+    proctime()               : 返回 'yyyy-MM-dd HH:mm:ss' 的时间
+
+3、将数据往 JDBC 类的数据库中写的时候，都可以使用 JDBCSink 这个类
+    1）为什么维度数据 通过 JDBCSink 往 Phoenix 中写？？
+        JDBCSink 只能将数据写入到一张表中，而我们的维度数据表众多
+
+4、JDBC 这里，所有的索引都是从 1 开始
+
+2022.06.02
+1、有没有自定义过 FlinkSQL 中的 UDF/UDTF/UDAF ???
+     有过， 在完成 页面关键词统计的时候，我们通过自定义 UDTF 实现了 将用户搜索的内容拆分成多个 keyword ，通过分组、开窗、聚合，对 keyword 进行统计
+
+2022.06.03
+1、Flink SQL 中：
+    1）指定水位线：建表的时候指定
+        CREATE TABLE Orders (
+            `user` BIGINT,
+            product STRING,
+            order_time TIMESTAMP(3),
+            WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND
+        ) WITH ( . . . );
+    【
+        当前项目中，对于 DwsTrafficSourceKeywordPageViewWindow 流量域页面关键词聚合的需求，创建的表为：
+        create table if not exists dwd_traffic_page_log(
+        	`common`	map<string, string>,
+        	`page`	    map<string, string>,
+        	`ts` 	    bigint,
+        	order_time as TO_TIMESTAMP(from_unixtime(ts)),
+            WATERMARK FOR order_time AS order_time - INTERVAL '10' SECOND
+        )
+        如上所示，其中
+            TIMESTAMP(3) 中的 3 为精度， 格式为：yyyy-MM-dd HH:mm:ss 格式
+            对于当前项目，提取到的 ts 为 bigInt 类型，
+            ts bigint --> timestamp :
+                    1、ts --> 日期字符串：          需要调用 from_unixTime(second[, string]) 将 秒值的数据转换成stringg 类型的 string
+                    2、日期字符串 -->timestamp:     to_timestamp(string1, string2) 将string1 按照 string2 的格式进行转换
+    】
+    2）分组后开窗：
+        CREATE TABLE Orders (
+          user       BIGINT,
+          product    STIRNG,
+          amount     INT,
+          order_time TIMESTAMP(3),
+          WATERMARK FOR order_time AS order_time - INTERVAL '1' MINUTE
+        ) WITH (...);
+
+        SELECT
+          user,
+          TUMBLE_START(order_time, INTERVAL '1' DAY) AS wStart,
+          SUM(amount) FROM Orders
+        GROUP BY
+          TUMBLE(order_time, INTERVAL '1' DAY),
+          user
+
+2、静态方法，其泛型模板声明加到类的后面是找不到的，所以需要按照如下操作：
+    public static <T> SinkFunction<T> getJdbcSink(String sql)
+    其中第一个<T> 表示泛型模板声明
+
+2022.06.04
+1、package org.apache.commons.lang3; 下提供了对 String 操作的便捷的工具类：StringUtils
+    1）判断对象为空     ： StringUtils.isEmpty(str);
+    2) 判断对象不为空   ： StringUtils.isNotEmpty(str);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

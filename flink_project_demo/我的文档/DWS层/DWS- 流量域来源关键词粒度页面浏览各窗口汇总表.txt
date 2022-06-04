@@ -1,0 +1,116 @@
+                                                        DWS- 流量域来源关键词粒度页面浏览各窗口汇总表
+1、大致思路：
+  分词功能提供，分词函数
+    1） 完成当前功能采用 FlinkSQL
+    2） 既然需要进行分词统计，首先 ------------ 分词
+    3）分词------- 采用 IK 分词器
+        i.导入 IK分词器依赖
+        ii.编写 分词功能的类
+    4） 由于需要在 sql 里使用 IK 分词类提供的功能，在sql 中的话，那就是对应的函数，
+        则去官网中 找到 Table Function
+    5） Table Function 提供了
+        标量函数    UDF
+        表值函数    UDTF
+        聚合函数    UDAF
+    6) 当前需求的话，使用 分词，则为 UDTF, 查看官网中的定义方式
+    7） UDTF 需要自定义 Function 类 继承 TableFunction<> , 里面提供了 eval（） 方法
+    8） 在 eval（） 方法中使用自定义好的 ik 分词器功能
+
+  功能实现流程：
+     1、环境准备
+        （注册函数）
+     2、检查点
+     3、从 dwd_traffic_page_log topic 中读取数据创建动态表
+     4、从页面日志中将搜索行为过滤出来
+     5、使用分词函数，将数据进行分词，并将分词后的数据与原表进行 连接 （官网中的连接）
+     6、分组、开窗、聚合计算 （官网中 的开窗）
+     7、将统计结果写入到 ClickHouse
+        7.1 FlinkSQL 1.13 没有提供 与 ClickHouse 的连接器，所以需要转换成 流，将数据写入到 ClickHouse 中
+            由于只有分词的结果，只需要写入到一张表中，所以 可以直接使用 JDBCSink
+        7.2 将流中的数据写入到 ClickHouse 中
+
+2、搜索关键词的来源：
+    用户通过关键词进行搜索，那么有三个关键点表明是通过关键词进行搜索
+        1） last_page_id = search
+        2)  item_type = keyword
+        3)  item != null
+    也就表明 1）上一个页面是搜索页面，
+            2） 操作的项目就是 关键词
+            3） 具体的关键词是什么
+
+3、将关键词通过 keywordUDTF 函数切分好了后，如何侧写到原来表中的呢？？？
+    1）由于炸裂出的算一个表，侧写到原来的表中，就相当于两个表的 inner join
+    2) 所以查看官网中 sql--query 部分，找到 TableFunction 下的 inner join 即可
+        SELECT order_id, res
+        FROM Orders,
+        LATERAL TABLE(table_func(order_id)) t(res)
+
+4、炸裂侧写好了之后， 需要对炸裂出来的 关键词进行 分组、开窗、聚合
+    既然要开窗，则需要 设置水位线，肯定是在创建表的时候，指派水位线，
+    从官网中 create table 出可以看到 指派水位线的语句
+    CREATE TABLE Orders (
+        `user` BIGINT,
+        product STRING,
+        order_time TIMESTAMP(3),
+        WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND
+    ) WITH ( . . . );
+
+    需要一个 timestamp 的字段，将 timestamp 字段的值，作为 watermarker 生成的策略的值。而当前只有 ts bigint
+     ts bigint --> timestamp :
+        1、ts --> 日期字符串：          需要调用 from_unixTime(second[, string]) 将 秒值的数据转换成stringg 类型的 string
+        2、日期字符串 -->timestamp:     to_timestamp(string1, string2) 将string1 按照 string2 的格式进行转换
+     所以建表语句如下：
+        create table if not exists dwd_traffic_page_log(
+        	`common`	map<string, string>,
+        	`page`	    map<string, string>,
+        	`ts` 	    bigint,
+        	order_time as TO_TIMESTAMP(from_unixtime(ts)),
+            WATERMARK FOR order_time AS order_time - INTERVAL '10' SECOND
+        )
+
+5、指定好了水位线，紧接着需要 进行分组，开窗，聚合操作，开窗操作见 官网 中 sql query 中的 window aggregate
+    设定窗口的sql 语句为：
+    -- tumbling window aggregation
+    Flink SQL> SELECT window_start, window_end, SUM(price)
+               FROM TABLE(
+                 TUMBLE(TABLE Bid, DESCRIPTOR(bidtime), INTERVAL '10' MINUTES))
+               GROUP BY window_start, window_end;
+
+6、由于当前需求采用 FlinkSQL 完成，需要将汇总表数据写入到ClickHouse 中，但是 Flink SQL当前版本并没有提供与ClickHouse 的连接器
+   所以还是需要将 FlinkSQL 中最终的Table 转换成 流，然后通过 流.addSink()将数据写入到ClickHouse
+        只有关键词统计的一种数据，所以可以采用 JdbcSink
+        SinkFunction JdbcSink.sink()
+
+------------------------------------------------------------------------------------------------------------------------------------
+DESC : 流量域来源关键词粒度页面浏览各窗口轻度聚合
+需要开启的组件：
+     flume , zk, Kafka , [HDFS],DwdTrafficBaseLogSplit, DwsTrafficSourceKeywordPageViewWindow
+执行流程：
+     1）flume 采集神策大数据提供的前端用户埋点日志数据，将日志数据存储到 Kafka 中的 topic_log主题中, 作为 ODS层的日志数据
+     2）Flink 程序读取 ODS层的 topic_log 中的数据，将topic_log 进行分流，将分流的结果保存到 Kafka 各个流量域主题中，作为 流量域事务事实表
+         启动日志： dwd_traffic_start_log
+         页面日志： dwd_traffic_page_log
+         曝光日志： dwd_traffic_display_log
+         动作日志： dwd_traffic_action_log
+         错误日志： dwd_traffic_error_log
+     3) 由于关键词只是在 页面日志中存在，当前读取Kafka 数据采用FlinkSQL 方式，
+        所以创建动态表，读取 dwd_traffic_page_log 数据
+     4） 由于关键词所在页面的 上一页为 search，当前的项目类型为 keyword，项目不为空，所以对当前页面进行判断
+             last_page_id = search
+             item_type = keyword
+             item != null
+     5) 根据以上条件进行过滤，过滤出包含关键词的页面
+     6）由于需要将搜索内容进行分词操作，当前使用 ik 分词器，编写 ik 分词工具类
+     7）由于使用 FlinkSQL，要在 sql 中使用分词功能，直接使用工具类调用方法肯定是不行的。
+         所以需要自定义一个函数，用于将搜索内容拆分为多个关键词，类似Hive 中炸裂函数
+        所以需要自定义 UDTF (User Definied Table Function)
+     8）由于拆分后的每个关键词需要与原来的数据构成一行，所以需要类似 Hive 中的 侧写功能，
+         在Flink 官网中的 sql - join 中提供了侧写的使用方式
+     9）炸裂，侧写好数据后，需要将数据按照关键词进行分组
+     10）将分好组的数据 进行开窗（官网中也提供了 分组后使用窗口函数的方式），聚合统计
+     11）由于需要进行开窗，所以需要提前指定水位线，在FlinkSQL中，指定水位线是需要在创建表的时候指定水位线的。
+     12）将统计好的数据，写入到 ClickHouse进行存储
+          （1） FlinkSQL没有提供与ClickHouse 的连接器，所以需要将 FlinkSQL 中的 Table 转换成 流对象
+               FlinkSQL 中的数据要转换成流，那么在流中以什么类型保存呢，所以就需要提供一个类，用来指明sql中的数据转换成流后以什么类型存在
+         （2）转换成流后，将流中的数据写入到ClickHouse 中
+                 提供ClickHouse 工具类
